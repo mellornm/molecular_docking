@@ -14,4 +14,6 @@ dependencies = [
     "rich",
     "questionary",
     "ruff>=0.15.20",
+    "openmm>=8.5.2",
+    "pdbfixer>=1.12.0",
 ]

@@ -1,0 +1,10 @@
+integrator              = steep      ; Algoritmo de descida mais íngreme
+emtol                   = 1000.0     ; Parar quando a força máxima for < 1000 kJ/mol/nm
+emstep                  = 0.01       ; Tamanho do passo de minimização
+nsteps                  = 50000      ; Número máximo de passos
+nstlist                 = 1          ; Frequência de atualização da lista de vizinhos
+cutoff-scheme           = Verlet     ; Esquema moderno de busca de vizinhos
+coulombtype             = PME        ; Particle Mesh Ewald para eletrostática de longo alcance
+rcoulomb                = 1.0        ; Raio de corte eletrostático (nm)
+rvdw                    = 1.0        ; Raio de corte de Van der Waals (nm)
+pbc                     = xyz        ; Condições de contorno periódicas em 3D

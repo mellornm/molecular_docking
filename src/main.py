@@ -10,7 +10,15 @@ from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.table import Table
 
-from docking import analysis, box_utils, preparation, vina_runner, pharmacokinetics
+from docking import (
+    analysis,
+    box_utils,
+    preparation,
+    vina_runner,
+    pharmacokinetics,
+    md_prep,
+    md_equil,
+)
 from docking.preparation import get_executable
 
 app = typer.Typer(help="Pipeline de Docking Molecular Automatizado")
@@ -96,65 +104,165 @@ def render_interactions_table(interactions: dict):
 
 def render_admet_table(admet: dict):
     """
-    Exibe uma tabela no terminal com os descritores farmacocinéticos (ADMET)
-    e o status dos filtros moleculares clássicos (Lipinski e Veber).
+    Exibe uma tabela detalhada e organizada em seções no terminal com os
+    descritores físico-químicos, predições farmacocinéticas e alertas de toxicidade.
     """
     if "error" in admet:
         console.print(f"[bold red]Erro ao calcular ADMET:[/bold red] {admet['error']}")
         return
 
     table = Table(
-        title="[bold magenta]Triagem Farmacocinética (ADMET)[/bold magenta]",
+        title="[bold magenta]Triagem ADMET e Perfil Farmacocinético[/bold magenta]",
         show_header=True,
         header_style="bold cyan",
     )
-    table.add_column("Propriedade", style="yellow")
-    table.add_column("Valor Calculado", justify="right", style="white")
-    table.add_column("Filtro/Limite", style="blue")
-    table.add_column("Status", justify="center")
+    table.add_column("Propriedade/Parâmetro", style="yellow")
+    table.add_column("Valor/Resultado", justify="right", style="white")
+    table.add_column("Critério/Limite", style="blue")
+    table.add_column("Status/Veredito", justify="center")
 
-    # Linha Lipinski MW
+    # --- SEÇÃO 1: Físico-Química (Lipinski & Veber) ---
+    table.add_row(
+        "[bold cyan]1. Parâmetros Físico-Químicos (Lipinski/Veber)[/bold cyan]",
+        "",
+        "",
+        "",
+    )
+
     mw = admet.get("molecular_weight", 0.0)
-    mw_status = "[bold green]OK[/bold green]" if mw <= 500 else "[bold red]VIOLADO[/bold red]"
-    table.add_row("Peso Molecular (MW)", f"{mw:.2f} g/mol", "<= 500.00", mw_status)
+    mw_status = (
+        "[bold green]OK[/bold green]" if mw <= 500 else "[bold red]VIOLADO[/bold red]"
+    )
+    table.add_row("  Peso Molecular (MW)", f"{mw:.2f} g/mol", "<= 500.00", mw_status)
 
-    # Linha Lipinski LogP
     logp = admet.get("logp", 0.0)
-    logp_status = "[bold green]OK[/bold green]" if logp <= 5 else "[bold red]VIOLADO[/bold red]"
-    table.add_row("Lipofilicidade (LogP)", f"{logp:.2f}", "<= 5.00", logp_status)
+    logp_status = (
+        "[bold green]OK[/bold green]" if logp <= 5 else "[bold red]VIOLADO[/bold red]"
+    )
+    table.add_row("  Lipofilicidade (LogP)", f"{logp:.2f}", "<= 5.00", logp_status)
 
-    # Linha Lipinski HBD
     hbd = admet.get("hydrogen_bond_donors", 0)
-    hbd_status = "[bold green]OK[/bold green]" if hbd <= 5 else "[bold red]VIOLADO[/bold red]"
-    table.add_row("Doadores de H (HBD)", str(hbd), "<= 5", hbd_status)
+    hbd_status = (
+        "[bold green]OK[/bold green]" if hbd <= 5 else "[bold red]VIOLADO[/bold red]"
+    )
+    table.add_row("  Doadores de H (HBD)", str(hbd), "<= 5", hbd_status)
 
-    # Linha Lipinski HBA
     hba = admet.get("hydrogen_bond_acceptors", 0)
-    hba_status = "[bold green]OK[/bold green]" if hba <= 10 else "[bold red]VIOLADO[/bold red]"
-    table.add_row("Aceitadores de H (HBA)", str(hba), "<= 10", hba_status)
+    hba_status = (
+        "[bold green]OK[/bold green]" if hba <= 10 else "[bold red]VIOLADO[/bold red]"
+    )
+    table.add_row("  Aceitadores de H (HBA)", str(hba), "<= 10", hba_status)
 
-    # Linha Veber TPSA
     tpsa = admet.get("tpsa", 0.0)
-    tpsa_status = "[bold green]OK[/bold green]" if tpsa <= 140 else "[bold red]VIOLADO[/bold red]"
-    table.add_row("Superfície Polar (TPSA)", f"{tpsa:.2f} Å²", "<= 140.00", tpsa_status)
+    tpsa_status = (
+        "[bold green]OK[/bold green]" if tpsa <= 140 else "[bold red]VIOLADO[/bold red]"
+    )
+    table.add_row(
+        "  Superfície Polar (TPSA)", f"{tpsa:.2f} Å²", "<= 140.00", tpsa_status
+    )
 
-    # Linha Veber RotBonds
     rotb = admet.get("rotatable_bonds", 0)
-    rotb_status = "[bold green]OK[/bold green]" if rotb <= 10 else "[bold red]VIOLADO[/bold red]"
-    table.add_row("Ligações Rotacionáveis", str(rotb), "<= 10", rotb_status)
+    rotb_status = (
+        "[bold green]OK[/bold green]" if rotb <= 10 else "[bold red]VIOLADO[/bold red]"
+    )
+    table.add_row("  Ligações Rotacionáveis", str(rotb), "<= 10", rotb_status)
+
+    # --- SEÇÃO 2: Predições Farmacocinéticas (ADME) ---
+    table.add_section()
+    table.add_row(
+        "[bold cyan]2. Predições Farmacocinéticas (ADME)[/bold cyan]", "", "", ""
+    )
+
+    hia = admet.get("hia_status", "N/A")
+    hia_status = (
+        "[bold green]Alta[/bold green]"
+        if hia == "Alta Absorção"
+        else "[bold red]Baixa[/bold red]"
+    )
+    table.add_row(
+        "  Absorção Intestinal (HIA)",
+        hia,
+        "Egan Egg (TPSA<=132 & -1.0<=LogP<=5.8)",
+        hia_status,
+    )
+
+    bbb = admet.get("bbb_status", "N/A")
+    bbb_status = (
+        "[bold green]Permeável[/bold green]"
+        if bbb == "Permeável"
+        else "[bold yellow]Incompatível/Baixa[/bold yellow]"
+    )
+    table.add_row(
+        "  Permeabilidade SNC (BBB)",
+        bbb,
+        "Clark (Neutra, TPSA<90 & 1.0<=LogP<=5.0)",
+        bbb_status,
+    )
+
+    pgp = admet.get("pgp_status", "N/A")
+    pgp_status = (
+        "[bold yellow]Efluxo Ativo[/bold yellow]"
+        if "Substrato" in pgp
+        else "[bold green]Baixo Efluxo[/bold green]"
+    )
+    table.add_row("  Perfil de Efluxo (P-gp)", pgp, "MW > 400 & TPSA > 80", pgp_status)
+
+    # --- SEÇÃO 3: Triagem de Toxicidade (T) ---
+    table.add_section()
+    table.add_row("[bold cyan]3. Triagem de Toxicidade (T)[/bold cyan]", "", "", "")
+
+    toxic_alerts = admet.get("toxic_alerts", [])
+    if toxic_alerts:
+        tox_status = "[bold red]ALERTA[/bold red]"
+        tox_val = ", ".join(toxic_alerts)
+    else:
+        tox_status = "[bold green]Seguro[/bold green]"
+        tox_val = "Nenhum alerta estrutural encontrado"
+    table.add_row(
+        "  Alertas Estruturais (PAINS)",
+        tox_val,
+        "Subestruturas Reativas / PAINS",
+        tox_status,
+    )
 
     console.print(table)
 
-    # Veredito Geral
+    # Veredito Geral Integrado
     pass_filters = admet.get("pass_filters", False)
+    lipinski_pass = admet.get("lipinski_pass", False)
+    veber_pass = admet.get("veber_pass", False)
+    hia_status_val = admet.get("hia_status", "")
+
     if pass_filters:
-        veredito = "[bold white on green]  APROVADO  [/bold white on green]"
-        console.print(Panel(f"Veredito de Triagem ADMET: {veredito}\nA molécula atende aos critérios clássicos de Lipinski (máximo 1 violação) e Veber (0 violações).", border_style="green"))
+        veredito = "[bold white on green]  APROVADO (BIODISPONÍVEL & SEGURO)  [/bold white on green]"
+        message = (
+            f"Veredito de Triagem ADMET: {veredito}\n"
+            f"• Físico-Química: A molécula atende às regras clássicas de Lipinski e Veber.\n"
+            f"• Farmacocinética: Alta Absorção Intestinal (HIA) estimada.\n"
+            f"• Toxicidade: Nenhum alerta estrutural reativo ou PAINS foi identificado."
+        )
+        border_style = "green"
     else:
-        veredito = "[bold white on red]  REPROVADO  [/bold white on red]"
-        violacoes = admet.get("lipinski_violations", []) + admet.get("veber_violations", [])
-        violacoes_str = ", ".join(violacoes) if violacoes else "Filtros não atendidos."
-        console.print(Panel(f"Veredito de Triagem ADMET: {veredito}\nViolações: [red]{violacoes_str}[/red]", border_style="red"))
+        reasons = []
+        if not lipinski_pass:
+            reasons.append("Violou regras de Lipinski")
+        if not veber_pass:
+            reasons.append("Violou regras de Veber")
+        if hia_status_val == "Baixa Absorção":
+            reasons.append("Baixa Absorção Intestinal (HIA)")
+        if len(toxic_alerts) > 0:
+            reasons.append(f"Alertas de Toxicidade/PAINS: {', '.join(toxic_alerts)}")
+
+        veredito = "[bold white on red]  REPROVADO / RISCO ADMET  [/bold white on red]"
+        reasons_str = "; ".join(reasons)
+        message = (
+            f"Veredito de Triagem ADMET: {veredito}\n"
+            f"Problemas identificados: [red]{reasons_str}[/red]\n"
+            f"Atenção: A molécula possui propriedades físico-químicas desfavoráveis, baixa absorção intestinal ou riscos de toxicidade estrutural."
+        )
+        border_style = "red"
+
+    console.print(Panel(message, border_style=border_style))
 
 
 @app.command(name="validate")
@@ -255,11 +363,13 @@ def validate(
 
             # Triagem ADMET
             try:
-                admet = pharmacokinetics.calculate_admet_descriptors(results_dir / "docked_poses.sdf")
+                admet = pharmacokinetics.calculate_admet_descriptors(
+                    results_dir / "docked_poses.sdf"
+                )
             except Exception as admet_err:
                 admet = {"error": str(admet_err), "pass_filters": False}
 
-            interactions["pharmacokinetics"] = admet
+            interactions["pharmacokinetics"] = admet  # type: ignore
 
             # Salva o arquivo JSON consolidado
             with open(results_dir / "interactions.json", "w") as f:
@@ -282,7 +392,7 @@ def validate(
 
         # Renderiza a tabela de contatos estáticos no terminal
         render_interactions_table(interactions)
-        render_admet_table(interactions.get("pharmacokinetics", {}))
+        render_admet_table(interactions.get("pharmacokinetics", {}))  # type: ignore
 
     except Exception as e:
         console.print(f"\n[bold red]FATAL ERROR:[/bold red] {e}")
@@ -400,7 +510,7 @@ def screen(
             except Exception as admet_err:
                 admet = {"error": str(admet_err), "pass_filters": False}
 
-            interactions["pharmacokinetics"] = admet
+            interactions["pharmacokinetics"] = admet  # type: ignore
 
             # Salva o arquivo JSON consolidado
             with open(results_dir / "interactions.json", "w") as f:
@@ -418,7 +528,7 @@ def screen(
 
         # Renderiza a tabela de contatos estáticos no terminal
         render_interactions_table(interactions)
-        render_admet_table(interactions.get("pharmacokinetics", {}))
+        render_admet_table(interactions.get("pharmacokinetics", {}))  # type: ignore
 
     except Exception as e:
         console.print(f"\n[bold red]FATAL ERROR during screening:[/bold red] {e}")
@@ -436,7 +546,9 @@ def interactive():
                 "2. Download de Ligante (PubChem)",
                 "3. Preparação de Ligante (SDF -> PDBQT)",
                 "4. Triagem Virtual (Screening)",
-                "5. Sair",
+                "5. Preparar Dinâmica Molecular (GROMACS)",
+                "6. Rodar Equilíbrio da Dinâmica (NVT/NPT)",
+                "7. Sair",
             ],
         ).ask()
 
@@ -488,8 +600,385 @@ def interactive():
                 exhaustiveness=int(ex),
             )
 
-        elif choice == "5. Sair":
+        elif choice == "5. Preparar Dinâmica Molecular (GROMACS)":
+            rec_default = "data/1OSV/processed/receptor.pdb"
+            if not Path(rec_default).exists():
+                rec_default = ""
+
+            sdf_default = "data/screening/desoxicolato/docked_poses.sdf"
+            if not Path(sdf_default).exists():
+                sdf_default = ""
+
+            out_default = "data/md_files"
+
+            receptor_path = questionary.path(
+                "Caminho para o PDB original da proteína (Receptor):",
+                default=rec_default,
+            ).ask()
+
+            sdf_path = questionary.path(
+                "Caminho para o arquivo docked_poses.sdf (Ligante):",
+                default=sdf_default,
+            ).ask()
+
+            output_dir = questionary.text(
+                "Diretório de saída para a Dinâmica Molecular:", default=out_default
+            ).ask()
+
+            if not receptor_path or not sdf_path or not output_dir:
+                console.print(
+                    "[bold red]Operação cancelada: todos os caminhos devem ser preenchidos.[/bold red]"
+                )
+                continue
+
+            try:
+                console.print(
+                    Panel.fit(
+                        f"[bold blue]Preparação e Minimização de Energia de Dinâmica Molecular (GROMACS)[/bold blue]\n"
+                        f"Receptor: {receptor_path}\n"
+                        f"Ligante (SDF): {sdf_path}\n"
+                        f"Diretório de Saída: {output_dir}",
+                        border_style="blue",
+                    )
+                )
+
+                with Progress(
+                    SpinnerColumn(),
+                    TextColumn("[progress.description]{task.description}"),
+                    console=console,
+                ) as progress:
+                    tasks = {
+                        "A": progress.add_task(
+                            description="[A] Cura do receptor com PDBFixer",
+                            total=1,
+                            start=False,
+                        ),
+                        "B": progress.add_task(
+                            description="[B] Extração do Ligante com RDKit",
+                            total=1,
+                            start=False,
+                        ),
+                        "C": progress.add_task(
+                            description="[C] Parametrização do Ligante (ACPYPE)",
+                            total=1,
+                            start=False,
+                        ),
+                        "D": progress.add_task(
+                            description="[D] Topologia da Proteína (pdb2gmx)",
+                            total=1,
+                            start=False,
+                        ),
+                        "E": progress.add_task(
+                            description="[E] Fusão de Coordenadas (complex.gro)",
+                            total=1,
+                            start=False,
+                        ),
+                        "F": progress.add_task(
+                            description="[F] Fusão de Topologia (Stitching)",
+                            total=1,
+                            start=False,
+                        ),
+                        "G": progress.add_task(
+                            description="[G] Definição da Caixa de Simulação (editconf)",
+                            total=1,
+                            start=False,
+                        ),
+                        "H": progress.add_task(
+                            description="[H] Solvatação do Sistema (solvate)",
+                            total=1,
+                            start=False,
+                        ),
+                        "I": progress.add_task(
+                            description="[I] Compilação de Íons (grompp)",
+                            total=1,
+                            start=False,
+                        ),
+                        "J": progress.add_task(
+                            description="[J] Neutralização e Concentração (genion)",
+                            total=1,
+                            start=False,
+                        ),
+                        "K": progress.add_task(
+                            description="[K] Grompp Definitivo (em.tpr)",
+                            total=1,
+                            start=False,
+                        ),
+                        "L": progress.add_task(
+                            description="[L] Minimização de Energia (mdrun)",
+                            total=1,
+                            start=False,
+                        ),
+                    }
+
+                    for step, status in md_prep.prepare_md_system(
+                        Path(receptor_path), Path(sdf_path), Path(output_dir)
+                    ):
+                        task_id = tasks[step]
+                        if status == "start":
+                            progress.start_task(task_id)
+                        elif status == "success":
+                            progress.update(task_id, completed=1)
+
+                console.print(
+                    "\n[bold green]✓ Preparação e Minimização de Energia concluídas com sucesso![/bold green]"
+                )
+                console.print(
+                    f"Arquivos e outputs gerados em: [cyan]{output_dir}[/cyan]"
+                )
+
+            except md_prep.DependencyError as e:
+                console.print(
+                    Panel(
+                        f"[bold red]Erro de Dependência GROMACS/ACPYPE:[/bold red]\n{e}",
+                        border_style="red",
+                        title="Falha de Dependência",
+                    )
+                )
+            except md_prep.SimulationPrepError as e:
+                console.print(
+                    Panel(
+                        f"[bold red]Erro de Preparação na Dinâmica Molecular:[/bold red]\n{e}",
+                        border_style="red",
+                        title="Falha na Preparação",
+                    )
+                )
+            except FileNotFoundError as e:
+                console.print(
+                    Panel(
+                        f"[bold red]Arquivo Não Encontrado:[/bold red]\n{e}",
+                        border_style="red",
+                        title="Erro de Caminho",
+                    )
+                )
+            except Exception as e:
+                console.print(
+                    Panel(
+                        f"[bold red]Erro Inesperado no Fluxo de Dinâmica:[/bold red]\n{e}",
+                        border_style="red",
+                        title="Falha Crítica",
+                    )
+                )
+
+        elif choice == "6. Rodar Equilíbrio da Dinâmica (NVT/NPT)":
+            md_dir_default = "data/md_files"
+            md_dir = questionary.text(
+                "Diretório de trabalho da Dinâmica Molecular (onde contêm em.gro e topol.top):",
+                default=md_dir_default,
+            ).ask()
+
+            if not md_dir:
+                console.print(
+                    "[bold red]Operação cancelada: o diretório de trabalho deve ser preenchido.[/bold red]"
+                )
+                continue
+
+            try:
+                console.print(
+                    Panel.fit(
+                        f"[bold blue]Equilíbrio Termodinâmico da Dinâmica Molecular (GROMACS)[/bold blue]\n"
+                        f"Diretório de Trabalho: {md_dir}",
+                        border_style="blue",
+                    )
+                )
+
+                with Progress(
+                    SpinnerColumn(),
+                    TextColumn("[progress.description]{task.description}"),
+                    console=console,
+                ) as progress:
+                    tasks = {
+                        "A": progress.add_task(
+                            description="[A] Geração de Grupos e Índices (make_ndx)",
+                            total=1,
+                            start=False,
+                        ),
+                        "B": progress.add_task(
+                            description="[B] Compilação da Caixa NVT (grompp)",
+                            total=1,
+                            start=False,
+                        ),
+                        "C": progress.add_task(
+                            description="[C] Execução do Equilíbrio NVT (mdrun)",
+                            total=1,
+                            start=False,
+                        ),
+                        "D": progress.add_task(
+                            description="[D] Compilação da Caixa NPT (grompp)",
+                            total=1,
+                            start=False,
+                        ),
+                        "E": progress.add_task(
+                            description="[E] Execução do Equilíbrio NPT (mdrun)",
+                            total=1,
+                            start=False,
+                        ),
+                    }
+
+                    for step, status in md_equil.run_md_equilibration(Path(md_dir)):
+                        task_id = tasks[step]
+                        if status == "start":
+                            progress.start_task(task_id)
+                        elif status == "success":
+                            progress.update(task_id, completed=1)
+
+                console.print(
+                    "\n[bold green]✓ Equilíbrio NVT/NPT concluído com sucesso![/bold green]"
+                )
+                console.print(
+                    f"Estruturas equilibradas geradas em: [cyan]{md_dir}[/cyan]"
+                )
+
+            except md_prep.DependencyError as e:
+                console.print(
+                    Panel(
+                        f"[bold red]Erro de Dependência GROMACS:[/bold red]\n{e}",
+                        border_style="red",
+                        title="Falha de Dependência",
+                    )
+                )
+            except md_prep.SimulationPrepError as e:
+                console.print(
+                    Panel(
+                        f"[bold red]Erro de Execução no Equilíbrio GROMACS:[/bold red]\n{e}",
+                        border_style="red",
+                        title="Falha no Equilíbrio",
+                    )
+                )
+            except FileNotFoundError as e:
+                console.print(
+                    Panel(
+                        f"[bold red]Arquivo/Diretório Não Encontrado:[/bold red]\n{e}",
+                        border_style="red",
+                        title="Erro de Caminho",
+                    )
+                )
+            except Exception as e:
+                console.print(
+                    Panel(
+                        f"[bold red]Erro Inesperado no Fluxo de Equilíbrio:[/bold red]\n{e}",
+                        border_style="red",
+                        title="Falha Crítica",
+                    )
+                )
+
+        elif choice == "7. Sair":
             break
+
+
+@app.command(name="md-prep")
+def md_prep_command(
+    receptor: Path = typer.Option(
+        ..., "--receptor", help="Caminho para o PDB original da proteína"
+    ),
+    sdf: Path = typer.Option(
+        ..., "--sdf", help="Caminho para o arquivo docked_poses.sdf gerado no docking"
+    ),
+    out: Path = typer.Option(
+        ..., "--out", help="Diretório de saída para a Dinâmica Molecular"
+    ),
+):
+    """
+    PREPARAÇÃO E MINIMIZAÇÃO DE ENERGIA DE DINÂMICA MOLECULAR:
+    Prepara o receptor e o ligante, combina suas topologias e executa a minimização de energia no GROMACS.
+    """
+    console.print(
+        Panel.fit(
+            f"[bold blue]Preparação e Minimização de Energia de Dinâmica Molecular (GROMACS)[/bold blue]\n"
+            f"Receptor: {receptor}\n"
+            f"Ligante (SDF): {sdf}\n"
+            f"Diretório de Saída: {out}",
+            border_style="blue",
+        )
+    )
+
+    try:
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console,
+        ) as progress:
+            tasks = {
+                "A": progress.add_task(
+                    description="[A] Cura do receptor com PDBFixer",
+                    total=1,
+                    start=False,
+                ),
+                "B": progress.add_task(
+                    description="[B] Extração do Ligante com RDKit",
+                    total=1,
+                    start=False,
+                ),
+                "C": progress.add_task(
+                    description="[C] Parametrização do Ligante (ACPYPE)",
+                    total=1,
+                    start=False,
+                ),
+                "D": progress.add_task(
+                    description="[D] Topologia da Proteína (pdb2gmx)",
+                    total=1,
+                    start=False,
+                ),
+                "E": progress.add_task(
+                    description="[E] Fusão de Coordenadas (complex.gro)",
+                    total=1,
+                    start=False,
+                ),
+                "F": progress.add_task(
+                    description="[F] Fusão de Topologia (Stitching)",
+                    total=1,
+                    start=False,
+                ),
+                "G": progress.add_task(
+                    description="[G] Definição da Caixa de Simulação (editconf)",
+                    total=1,
+                    start=False,
+                ),
+                "H": progress.add_task(
+                    description="[H] Solvatação do Sistema (solvate)",
+                    total=1,
+                    start=False,
+                ),
+                "I": progress.add_task(
+                    description="[I] Compilação de Íons (grompp)", total=1, start=False
+                ),
+                "J": progress.add_task(
+                    description="[J] Neutralização e Concentração (genion)",
+                    total=1,
+                    start=False,
+                ),
+                "K": progress.add_task(
+                    description="[K] Grompp Definitivo (em.tpr)", total=1, start=False
+                ),
+                "L": progress.add_task(
+                    description="[L] Minimização de Energia (mdrun)",
+                    total=1,
+                    start=False,
+                ),
+            }
+
+            for step, status in md_prep.prepare_md_system(receptor, sdf, out):
+                task_id = tasks[step]
+                if status == "start":
+                    progress.start_task(task_id)
+                elif status == "success":
+                    progress.update(task_id, completed=1)
+
+        console.print(
+            "\n[bold green]✓ Preparação e Minimização de Energia concluídas com sucesso![/bold green]"
+        )
+        console.print(f"Arquivos e outputs gerados em: [cyan]{out}[/cyan]")
+    except md_prep.DependencyError as e:
+        console.print(f"\n[bold red]Erro de Dependência:[/bold red]\n{e}")
+        raise typer.Exit(code=1)
+    except md_prep.SimulationPrepError as e:
+        console.print(f"\n[bold red]Erro de Preparação:[/bold red]\n{e}")
+        raise typer.Exit(code=1)
+    except FileNotFoundError as e:
+        console.print(f"\n[bold red]Arquivo Não Encontrado:[/bold red]\n{e}")
+        raise typer.Exit(code=1)
+    except Exception as e:
+        console.print(f"\n[bold red]Erro Inesperado:[/bold red]\n{e}")
+        raise typer.Exit(code=1)
 
 
 if __name__ == "__main__":

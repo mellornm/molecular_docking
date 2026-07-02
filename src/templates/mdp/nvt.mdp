@@ -1,0 +1,18 @@
+title                   = NVT Equilibration for FXR-LIG
+define                  = -DPOSRES  ; Ativa restrição de posição para proteína e ligante
+integrator              = md         ; Integrador Leap-frog
+nsteps                  = 50000      ; 50000 passos * 2 fs = 100 picossegundos (ps)
+dt                      = 0.002      ; Passo de tempo de 2 femptossegundos (fs)
+; Controle de restrições de ligações (permite o passo de 2fs)
+constraint_algorithm    = lincs      
+constraints             = h-bonds    ; Restringe ligações envolvendo Hidrogênio
+; Termostato (Controle de Temperatura)
+tcoupl                  = V-rescale  ; Termostato Berendsen modificado (estável e estocástico)
+tc-grps                 = Protein_LIG Water_and_ions ; Grupos acoplados separadamente
+tau_t                   = 0.1   0.1  ; Constante de tempo para acoplamento (ps)
+ref_t                   = 310   310  ; Temperatura de referência (K)
+pcoupl                  = no         ; Sem acoplamento de pressão nesta etapa
+coulombtype             = PME
+rcoulomb                = 1.0
+rvdw                    = 1.0
+pbc                     = xyz

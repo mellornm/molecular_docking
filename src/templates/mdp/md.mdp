@@ -1,0 +1,25 @@
+title                   = Production MD for FXR-LIG (100 ns)
+integrator              = md
+nsteps                  = 50000000   ; 50 milhões de passos * 2 fs = 100.000 ps (100 ns)
+dt                      = 0.002
+constraint_algorithm    = lincs
+constraints             = h-bonds
+; Gravação de dados (Evite arquivos gigantescos gravando a cada 10-20 ps)
+nstxout-ensemble        = 5000       ; Grava coordenadas na trajetória a cada 10 ps
+nstenergy               = 5000       ; Grava energias a cada 10 ps
+nstlog                  = 5000       ; Escreve no log a cada 10 ps
+; Termostato
+tcoupl                  = V-rescale
+tc-grps                 = Protein_LIG Water_and_ions
+tau_t                   = 0.1   0.1
+ref_t                   = 310   310
+; Barostato de produção rigoroso
+pcoupl                  = Parrinello-Rahman ; O padrão ouro para amostragem de flutuações de caixa
+pcoupltype              = isotropic
+tau_p                   = 2.0
+ref_p                   = 1.0
+compressibility         = 4.5e-5
+coulombtype             = PME
+rcoulomb                = 1.0
+rvdw                    = 1.0
+pbc                     = xyz
