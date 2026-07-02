@@ -18,6 +18,7 @@ from docking import (
     pharmacokinetics,
     md_prep,
     md_equil,
+    md_analysis,
 )
 from docking.preparation import get_executable
 
@@ -548,7 +549,8 @@ def interactive():
                 "4. Triagem Virtual (Screening)",
                 "5. Preparar Dinâmica Molecular (GROMACS)",
                 "6. Rodar Equilíbrio da Dinâmica (NVT/NPT)",
-                "7. Sair",
+                "7. Executar Produção e Análise da Dinâmica (100 ns)",
+                "8. Sair",
             ],
         ).ask()
 
@@ -861,8 +863,113 @@ def interactive():
                     )
                 )
 
-        elif choice == "7. Sair":
+        elif choice == "7. Executar Produção e Análise da Dinâmica (100 ns)":
+            md_dir_default = "data/md_files"
+            md_dir = questionary.text(
+                "Diretório de trabalho da Dinâmica Molecular (onde contêm npt.gro e topol.top):",
+                default=md_dir_default,
+            ).ask()
+
+            if not md_dir:
+                console.print(
+                    "[bold red]Operação cancelada: o diretório de trabalho deve ser preenchido.[/bold red]"
+                )
+                continue
+
+            try:
+                console.print(
+                    Panel.fit(
+                        f"[bold blue]Produção e Análise de Dinâmica Molecular (GROMACS)[/bold blue]\n"
+                        f"Diretório de Trabalho: {md_dir}",
+                        border_style="blue",
+                    )
+                )
+
+                console.print("[yellow]Iniciando a produção da Dinâmica Molecular (grompp & mdrun)...[/yellow]")
+                md_analysis.run_production_md(Path(md_dir))
+                console.print("[bold green]✓ Produção concluída com sucesso![/bold green]")
+                
+                console.print("[yellow]Iniciando a análise da trajetória (RMSD, RMSF, Pontes de Hidrogênio)...[/yellow]")
+                md_analysis.analyze_trajectory(Path(md_dir))
+                console.print("[bold green]✓ Análise da trajetória concluída com sucesso![/bold green]")
+                console.print(f"Arquivos de análise gerados em: [cyan]{md_dir}[/cyan]")
+
+            except md_prep.DependencyError as e:
+                console.print(
+                    Panel(
+                        f"[bold red]Erro de Dependência GROMACS:[/bold red]\n{e}",
+                        border_style="red",
+                        title="Falha de Dependência",
+                    )
+                )
+            except md_prep.SimulationPrepError as e:
+                console.print(
+                    Panel(
+                        f"[bold red]Erro de Execução/Análise no GROMACS:[/bold red]\n{e}",
+                        border_style="red",
+                        title="Falha na Simulação/Análise",
+                    )
+                )
+            except FileNotFoundError as e:
+                console.print(
+                    Panel(
+                        f"[bold red]Arquivo/Diretório Não Encontrado:[/bold red]\n{e}",
+                        border_style="red",
+                        title="Erro de Caminho",
+                    )
+                )
+            except Exception as e:
+                console.print(
+                    Panel(
+                        f"[bold red]Erro Inesperado no Fluxo de Produção:[/bold red]\n{e}",
+                        border_style="red",
+                        title="Falha Crítica",
+                    )
+                )
+
+        elif choice == "8. Sair":
             break
+
+
+@app.command(name="md-run")
+def md_run_command(
+    working_dir: Path = typer.Option(
+        ..., "--dir", help="Diretório de trabalho onde estão os arquivos do equilíbrio (nvt/npt)"
+    ),
+):
+    """
+    PRODUÇÃO E ANÁLISE DE DINÂMICA MOLECULAR:
+    Compila e executa a produção da Dinâmica Molecular no GROMACS e gera as análises de trajetória (RMSD, RMSF, HBond).
+    """
+    console.print(
+        Panel.fit(
+            f"[bold blue]Produção e Análise de Dinâmica Molecular (GROMACS)[/bold blue]\n"
+            f"Diretório de Trabalho: {working_dir}",
+            border_style="blue",
+        )
+    )
+
+    try:
+        console.print("[yellow]Iniciando a produção da Dinâmica Molecular (grompp & mdrun)...[/yellow]")
+        md_analysis.run_production_md(working_dir)
+        console.print("[bold green]✓ Produção concluída com sucesso![/bold green]")
+        
+        console.print("[yellow]Iniciando a análise da trajetória (RMSD, RMSF, Pontes de Hidrogênio)...[/yellow]")
+        md_analysis.analyze_trajectory(working_dir)
+        console.print("[bold green]✓ Análise da trajetória concluída com sucesso![/bold green]")
+        console.print(f"Arquivos de análise gerados em: [cyan]{working_dir}[/cyan]")
+    except md_prep.DependencyError as e:
+        console.print(f"\n[bold red]Erro de Dependência:[/bold red]\n{e}")
+        raise typer.Exit(code=1)
+    except md_prep.SimulationPrepError as e:
+        console.print(f"\n[bold red]Erro na Dinâmica/Análise:[/bold red]\n{e}")
+        raise typer.Exit(code=1)
+    except FileNotFoundError as e:
+        console.print(f"\n[bold red]Arquivo Não Encontrado:[/bold red]\n{e}")
+        raise typer.Exit(code=1)
+    except Exception as e:
+        console.print(f"\n[bold red]Erro Inesperado:[/bold red]\n{e}")
+        raise typer.Exit(code=1)
 
 
 @app.command(name="md-prep")
