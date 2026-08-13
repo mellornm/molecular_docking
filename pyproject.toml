@@ -16,4 +16,6 @@ dependencies = [
     "ruff>=0.15.20",
     "openmm>=8.5.2",
     "pdbfixer>=1.12.0",
+    "matplotlib>=3.8.0",
+    "seaborn>=0.13.0",
 ]

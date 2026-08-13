@@ -2,10 +2,12 @@ title                   = Production MD for FXR-LIG (100 ns)
 integrator              = md
 nsteps                  = 50000000   ; 50 milhões de passos * 2 fs = 100.000 ps (100 ns)
 dt                      = 0.002
+; Restrições e continuação
+continuation            = yes        ; Continuação a partir do equilíbrio NPT
 constraint_algorithm    = lincs
 constraints             = h-bonds
 ; Gravação de dados (Evite arquivos gigantescos gravando a cada 10-20 ps)
-nstxout-ensemble        = 5000       ; Grava coordenadas na trajetória a cada 10 ps
+nstxout-compressed      = 5000       ; Grava coordenadas comprimidas na trajetória a cada 10 ps
 nstenergy               = 5000       ; Grava energias a cada 10 ps
 nstlog                  = 5000       ; Escreve no log a cada 10 ps
 ; Termostato
@@ -23,3 +25,4 @@ coulombtype             = PME
 rcoulomb                = 1.0
 rvdw                    = 1.0
 pbc                     = xyz
+gen_vel                 = no         ; Velocidades herdadas do NPT

@@ -6,17 +6,24 @@ from rdkit import Chem
 from pdbfixer import PDBFixer
 from openmm.app import PDBFile
 
+
 class DependencyError(Exception):
     """Exceção levantada quando um binário externo (GROMACS ou ACPYPE) não é encontrado no PATH."""
+
     pass
+
 
 class SimulationPrepError(Exception):
     """Exceção levantada quando há falha no processamento ou execução das etapas de preparação."""
+
     pass
+
 
 def find_executable(name: str) -> str:
     """Procura pelo executável no PATH atual ou em locais comuns do conda 'bioinfo'."""
-    path = shutil.which(name) or shutil.which(f"{name}.py") or shutil.which(f"{name}.exe")
+    path = (
+        shutil.which(name) or shutil.which(f"{name}.py") or shutil.which(f"{name}.exe")
+    )
     if path:
         return path
 
@@ -30,7 +37,7 @@ def find_executable(name: str) -> str:
         Path("/home/rmello/miniforge3/envs/bioinfo/bin") / name,
         Path("/home/rmello/miniforge3/envs/bioinfo/bin") / f"{name}.py",
     ]
-    
+
     # Caminhos para verificar no Windows
     possible_paths += [
         home / "Miniconda3" / "envs" / "bioinfo" / "Scripts" / name,
@@ -56,7 +63,9 @@ def extract_ligand(ligand_sdf: Path, output_dir: Path) -> Path:
         # Importante: removeHs=False garante que os hidrogênios do SDF sejam lidos
         supplier = Chem.SDMolSupplier(str(ligand_sdf), removeHs=False)
         if not supplier or len(supplier) == 0 or supplier[0] is None:
-            raise ValueError(f"Não foi possível ler o arquivo SDF ou ele está vazio: {ligand_sdf}")
+            raise ValueError(
+                f"Não foi possível ler o arquivo SDF ou ele está vazio: {ligand_sdf}"
+            )
         mol = supplier[0]
         # Adiciona hidrogênios para evitar problemas de radical ímpar (sqm/antechamber)
         mol = Chem.AddHs(mol, addCoords=True)
@@ -69,13 +78,13 @@ def extract_ligand(ligand_sdf: Path, output_dir: Path) -> Path:
         symbol = atom.GetSymbol()
         element_counts[symbol] += 1
         atom_name = f"{symbol}{element_counts[symbol]}"
-        
+
         # Formatação para o formato PDB (4 caracteres)
         if len(symbol) == 1:
             padded_name = f" {atom_name:<3}"
         else:
             padded_name = f"{atom_name:<4}"
-            
+
         info = Chem.AtomPDBResidueInfo()
         info.SetName(padded_name)
         info.SetResidueName("LIG")
@@ -89,8 +98,9 @@ def extract_ligand(ligand_sdf: Path, output_dir: Path) -> Path:
         Chem.MolToPDBFile(mol, str(ligand_pdb_path))
     except Exception as e:
         raise SimulationPrepError(f"Falha ao exportar ligante para PDB: {e}")
-        
+
     return ligand_pdb_path
+
 
 def run_acpype(ligand_pdb: Path, output_dir: Path):
     """
@@ -110,6 +120,7 @@ def run_acpype(ligand_pdb: Path, output_dir: Path):
 
     # Copia o PATH e adiciona o diretório do binário do acpype (onde o obabel está localizado no Conda)
     import os
+
     env = os.environ.copy()
     acpype_dir = str(Path(acpype_bin).parent)
     env["PATH"] = f"{acpype_dir}{os.pathsep}{env.get('PATH', '')}"
@@ -122,7 +133,7 @@ def run_acpype(ligand_pdb: Path, output_dir: Path):
             env=env,
             check=True,
             capture_output=True,
-            text=True
+            text=True,
         )
     except subprocess.CalledProcessError as e:
         # Mostra stdout ou stderr dependendo de onde o ACPYPE printou o erro (geralmente stdout)
@@ -134,6 +145,7 @@ def run_acpype(ligand_pdb: Path, output_dir: Path):
         )
     except Exception as e:
         raise SimulationPrepError(f"Erro ao iniciar processo do ACPYPE: {e}")
+
 
 def run_pdb2gmx(receptor_pdb: Path, output_dir: Path):
     """
@@ -148,7 +160,7 @@ def run_pdb2gmx(receptor_pdb: Path, output_dir: Path):
             fixer.findMissingResidues()
             fixer.findMissingAtoms()
             fixer.addMissingAtoms()
-            
+
             receptor_fixed = output_dir / "receptor_fixed.pdb"
             with open(receptor_fixed, "w") as f:
                 PDBFile.writeFile(fixer.topology, fixer.positions, f)
@@ -166,10 +178,13 @@ def run_pdb2gmx(receptor_pdb: Path, output_dir: Path):
     # Resolve o caminho do receptor para absoluto para garantir correto funcionamento em cwd diferente
     abs_receptor_pdb = receptor_pdb.resolve()
     if not abs_receptor_pdb.exists():
-        raise FileNotFoundError(f"Arquivo do receptor não encontrado em: {abs_receptor_pdb}")
+        raise FileNotFoundError(
+            f"Arquivo do receptor não encontrado em: {abs_receptor_pdb}"
+        )
 
     # Copia o PATH e adiciona o diretório do binário do gmx para o subprocesso
     import os
+
     env = os.environ.copy()
     gmx_dir = str(Path(gmx_bin).parent)
     env["PATH"] = f"{gmx_dir}{os.pathsep}{env.get('PATH', '')}"
@@ -177,11 +192,16 @@ def run_pdb2gmx(receptor_pdb: Path, output_dir: Path):
     cmd_gmx = [
         gmx_bin,
         "pdb2gmx",
-        "-f", str(abs_receptor_pdb),
-        "-o", "protein_processed.gro",
-        "-p", "topol.top",
-        "-ff", "amber99sb-ildn",
-        "-water", "tip3p"
+        "-f",
+        str(abs_receptor_pdb),
+        "-o",
+        "protein_processed.gro",
+        "-p",
+        "topol.top",
+        "-ff",
+        "amber99sb-ildn",
+        "-water",
+        "tip3p",
     ]
     try:
         subprocess.run(
@@ -190,12 +210,15 @@ def run_pdb2gmx(receptor_pdb: Path, output_dir: Path):
             env=env,
             check=True,
             capture_output=True,
-            text=True
+            text=True,
         )
     except subprocess.CalledProcessError as e:
         detailed_error = e.stderr.strip() or e.stdout.strip()
         # Se falhar por causa de átomos ausentes (ex: CG de um ASP ausente), tenta novamente com -missing
-        if "not found in the input file" in detailed_error or "missing" in detailed_error.lower():
+        if (
+            "not found in the input file" in detailed_error
+            or "missing" in detailed_error.lower()
+        ):
             cmd_gmx_missing = cmd_gmx + ["-missing"]
             try:
                 subprocess.run(
@@ -204,7 +227,7 @@ def run_pdb2gmx(receptor_pdb: Path, output_dir: Path):
                     env=env,
                     check=True,
                     capture_output=True,
-                    text=True
+                    text=True,
                 )
                 return
             except subprocess.CalledProcessError as e_inner:
@@ -222,6 +245,7 @@ def run_pdb2gmx(receptor_pdb: Path, output_dir: Path):
     except Exception as e:
         raise SimulationPrepError(f"Erro ao iniciar processo do GROMACS: {e}")
 
+
 def stitch_topology(output_dir: Path):
     """
     Etapa D: Lógica em Python para ler o arquivo 'topol.top' gerado e injetar o include do ligante
@@ -229,7 +253,9 @@ def stitch_topology(output_dir: Path):
     """
     topol_path = output_dir / "topol.top"
     if not topol_path.exists():
-        raise SimulationPrepError(f"O arquivo 'topol.top' esperado não foi gerado em {output_dir}")
+        raise SimulationPrepError(
+            f"O arquivo 'topol.top' esperado não foi gerado em {output_dir}"
+        )
 
     try:
         with open(topol_path, "r", encoding="utf-8") as f:
@@ -243,11 +269,20 @@ def stitch_topology(output_dir: Path):
     for line in lines:
         new_lines.append(line)
         if "forcefield.itp" in line and not ff_found:
-            new_lines.append('\n; Inclui a topologia do ligante gerada pelo ACPYPE\n#include "ligand_md.acpype/ligand_md_GMX.itp"\n')
+            new_lines.append(
+                "\n; Inclui a topologia do ligante gerada pelo ACPYPE\n"
+                '#include "ligand_md.acpype/ligand_md_GMX.itp"\n'
+                "\n; Restrições de posição do ligante para NVT/NPT\n"
+                "#ifdef POSRES\n"
+                '#include "ligand_md.acpype/posre_ligand_md.itp"\n'
+                "#endif\n"
+            )
             ff_found = True
 
     if not ff_found:
-        raise SimulationPrepError("Inclusão de 'forcefield.itp' não encontrada em topol.top.")
+        raise SimulationPrepError(
+            "Inclusão de 'forcefield.itp' não encontrada em topol.top."
+        )
 
     # Localiza a seção [ molecules ]
     molecules_idx = -1
@@ -263,16 +298,22 @@ def stitch_topology(output_dir: Path):
     protein_idx = -1
     for i in range(molecules_idx + 1, len(new_lines)):
         line_strip = new_lines[i].strip()
-        if line_strip and not line_strip.startswith(";") and not line_strip.startswith("#"):
+        if (
+            line_strip
+            and not line_strip.startswith(";")
+            and not line_strip.startswith("#")
+        ):
             protein_idx = i
             break
 
     if protein_idx == -1:
-        raise SimulationPrepError("Nenhuma molécula (proteína) ativa foi encontrada sob a seção '[ molecules ]'.")
+        raise SimulationPrepError(
+            "Nenhuma molécula (proteína) ativa foi encontrada sob a seção '[ molecules ]'."
+        )
 
     # Garante que a última linha termina com quebra de linha antes de adicionar o ligante
-    if new_lines and not new_lines[-1].endswith('\n'):
-        new_lines[-1] = new_lines[-1] + '\n'
+    if new_lines and not new_lines[-1].endswith("\n"):
+        new_lines[-1] = new_lines[-1] + "\n"
 
     # Insere a definição do ligante ligand_md estritamente na última linha
     new_lines.append("ligand_md                 1\n")
@@ -281,7 +322,10 @@ def stitch_topology(output_dir: Path):
         with open(topol_path, "w", encoding="utf-8") as f:
             f.writelines(new_lines)
     except Exception as e:
-        raise SimulationPrepError(f"Falha ao salvar as modificações em 'topol.top': {e}")
+        raise SimulationPrepError(
+            f"Falha ao salvar as modificações em 'topol.top': {e}"
+        )
+
 
 def prepare_md_system(receptor_pdb: Path, ligand_sdf: Path, output_dir: Path):
     """
@@ -298,16 +342,19 @@ def prepare_md_system(receptor_pdb: Path, ligand_sdf: Path, output_dir: Path):
             exec_name = cmd[0]
             exec_path = find_executable(exec_name)
             if not exec_path:
-                raise DependencyError(f"O executável '{exec_name}' não foi encontrado no PATH.")
+                raise DependencyError(
+                    f"O executável '{exec_name}' não foi encontrado no PATH."
+                )
             cmd[0] = exec_path
-            
+
             import os
+
             env = os.environ.copy()
             exec_dir = str(Path(exec_path).parent)
             env["PATH"] = f"{exec_dir}{os.pathsep}{env.get('PATH', '')}"
 
             if input_val is not None and isinstance(input_val, bytes):
-                input_val = input_val.decode('utf-8')
+                input_val = input_val.decode("utf-8")
 
             result = subprocess.run(
                 cmd,
@@ -315,7 +362,7 @@ def prepare_md_system(receptor_pdb: Path, ligand_sdf: Path, output_dir: Path):
                 env=env,
                 capture_output=True,
                 text=True,
-                input=input_val
+                input=input_val,
             )
             if result.returncode != 0:
                 error_msg = result.stderr.strip() or result.stdout.strip()
@@ -329,7 +376,9 @@ def prepare_md_system(receptor_pdb: Path, ligand_sdf: Path, output_dir: Path):
         except Exception as e:
             if isinstance(e, (SimulationPrepError, DependencyError)):
                 raise e
-            raise SimulationPrepError(f"Falha ao executar o comando da {step_name}: {e}")
+            raise SimulationPrepError(
+                f"Falha ao executar o comando da {step_name}: {e}"
+            )
 
     # Etapa A: Cura com PDBFixer
     yield "A", "start"
@@ -338,7 +387,7 @@ def prepare_md_system(receptor_pdb: Path, ligand_sdf: Path, output_dir: Path):
         fixer.findMissingResidues()
         fixer.findMissingAtoms()
         fixer.addMissingAtoms()
-        
+
         receptor_fixed = output_dir / "receptor_fixed.pdb"
         with open(receptor_fixed, "w", encoding="utf-8") as f:
             PDBFile.writeFile(fixer.topology, fixer.positions, f)
@@ -351,10 +400,12 @@ def prepare_md_system(receptor_pdb: Path, ligand_sdf: Path, output_dir: Path):
     try:
         supplier = Chem.SDMolSupplier(str(ligand_sdf), removeHs=False)
         if not supplier or len(supplier) == 0 or supplier[0] is None:
-            raise ValueError(f"Não foi possível ler o arquivo SDF ou ele está vazio: {ligand_sdf}")
+            raise ValueError(
+                f"Não foi possível ler o arquivo SDF ou ele está vazio: {ligand_sdf}"
+            )
         mol = supplier[0]
         mol = Chem.AddHs(mol, addCoords=True)
-        
+
         element_counts = collections.defaultdict(int)
         for atom in mol.GetAtoms():
             symbol = atom.GetSymbol()
@@ -364,7 +415,7 @@ def prepare_md_system(receptor_pdb: Path, ligand_sdf: Path, output_dir: Path):
                 padded_name = f" {atom_name:<3}"
             else:
                 padded_name = f"{atom_name:<4}"
-            
+
             info = Chem.AtomPDBResidueInfo()
             info.SetName(padded_name)
             info.SetResidueName("LIG")
@@ -390,21 +441,35 @@ def prepare_md_system(receptor_pdb: Path, ligand_sdf: Path, output_dir: Path):
     # Etapa D: Topologia da Proteína
     yield "D", "start"
     if not gmx_bin:
-        raise DependencyError("O executável 'gmx' (GROMACS) não foi encontrado no PATH.")
+        raise DependencyError(
+            "O executável 'gmx' (GROMACS) não foi encontrado no PATH."
+        )
     cmd_pdb2gmx = [
-        gmx_bin, "pdb2gmx",
-        "-f", "receptor_fixed.pdb",
-        "-o", "protein_processed.gro",
-        "-p", "topol.top",
-        "-ff", "amber99sb-ildn",
-        "-water", "tip3p"
+        gmx_bin,
+        "pdb2gmx",
+        "-f",
+        "receptor_fixed.pdb",
+        "-o",
+        "protein_processed.gro",
+        "-p",
+        "topol.top",
+        "-ff",
+        "amber99sb-ildn",
+        "-water",
+        "tip3p",
     ]
     try:
-        run_command(cmd_pdb2gmx, output_dir, step_name="Etapa D (Topologia da Proteína)")
+        run_command(
+            cmd_pdb2gmx, output_dir, step_name="Etapa D (Topologia da Proteína)"
+        )
     except SimulationPrepError as e:
         if "not found in the input file" in str(e) or "missing" in str(e).lower():
             cmd_pdb2gmx_missing = cmd_pdb2gmx + ["-missing"]
-            run_command(cmd_pdb2gmx_missing, output_dir, step_name="Etapa D (Topologia da Proteína com -missing)")
+            run_command(
+                cmd_pdb2gmx_missing,
+                output_dir,
+                step_name="Etapa D (Topologia da Proteína com -missing)",
+            )
         else:
             raise e
     yield "D", "success"
@@ -414,41 +479,38 @@ def prepare_md_system(receptor_pdb: Path, ligand_sdf: Path, output_dir: Path):
     try:
         prot_gro_path = output_dir / "protein_processed.gro"
         lig_gro_path = output_dir / "ligand_md.acpype" / "ligand_md_GMX.gro"
-        
+
         if not prot_gro_path.exists():
             raise FileNotFoundError(f"Arquivo {prot_gro_path} não encontrado.")
         if not lig_gro_path.exists():
             raise FileNotFoundError(f"Arquivo {lig_gro_path} não encontrado.")
-            
+
         with open(prot_gro_path, "r", encoding="utf-8") as f:
             prot_lines = f.readlines()
         with open(lig_gro_path, "r", encoding="utf-8") as f:
             lig_lines = f.readlines()
-            
+
         if len(prot_lines) < 3:
             raise ValueError("protein_processed.gro possui menos de 3 linhas.")
         if len(lig_lines) < 3:
             raise ValueError("ligand_md_GMX.gro possui menos de 3 linhas.")
-            
+
         prot_title = prot_lines[0]
         prot_atoms = prot_lines[2:-1]
         lig_atoms = lig_lines[2:-1]
-        
+
         total_atoms = len(prot_atoms) + len(lig_atoms)
         box_vector = prot_lines[-1]
-        
-        complex_lines = [
-            f"Complex of Protein and Ligand\n",
-            f" {total_atoms}\n"
-        ]
+
+        complex_lines = ["Complex of Protein and Ligand\n", f" {total_atoms}\n"]
         complex_lines.extend(prot_atoms)
         complex_lines.extend(lig_atoms)
         complex_lines.append(box_vector)
-        
+
         complex_gro_path = output_dir / "complex.gro"
         with open(complex_gro_path, "w", encoding="utf-8") as f:
             f.writelines(complex_lines)
-            
+
     except Exception as e:
         raise SimulationPrepError(f"Erro na Etapa E (Fusão de Coordenadas): {e}")
     yield "E", "success"
@@ -459,31 +521,35 @@ def prepare_md_system(receptor_pdb: Path, ligand_sdf: Path, output_dir: Path):
         topol_path = output_dir / "topol.top"
         if not topol_path.exists():
             raise FileNotFoundError(f"Arquivo {topol_path} não encontrado.")
-            
+
         with open(topol_path, "r", encoding="utf-8") as f:
             topol_lines = f.readlines()
-            
+
         new_topol_lines = []
         ff_found = False
         for line in topol_lines:
             new_topol_lines.append(line)
             if "forcefield.itp" in line and not ff_found:
-                new_topol_lines.append('\n; Inclui a topologia do ligante gerada pelo ACPYPE\n#include "ligand_md.acpype/ligand_md_GMX.itp"\n')
+                new_topol_lines.append(
+                    '\n; Inclui a topologia do ligante gerada pelo ACPYPE\n#include "ligand_md.acpype/ligand_md_GMX.itp"\n'
+                )
                 ff_found = True
-                
+
         if not ff_found:
-            raise ValueError("Inclusão de 'forcefield.itp' não encontrada em topol.top.")
-            
+            raise ValueError(
+                "Inclusão de 'forcefield.itp' não encontrada em topol.top."
+            )
+
         # Garante que a última linha termina com quebra de linha antes de adicionar o ligante
-        if new_topol_lines and not new_topol_lines[-1].endswith('\n'):
-            new_topol_lines[-1] = new_topol_lines[-1] + '\n'
-            
+        if new_topol_lines and not new_topol_lines[-1].endswith("\n"):
+            new_topol_lines[-1] = new_topol_lines[-1] + "\n"
+
         # Append ligand molecule name and count strictly as the last line
         new_topol_lines.append("ligand_md             1\n")
-        
+
         with open(topol_path, "w", encoding="utf-8") as f:
             f.writelines(new_topol_lines)
-            
+
     except Exception as e:
         raise SimulationPrepError(f"Erro na Etapa F (Fusão de Topologia): {e}")
     yield "F", "success"
@@ -491,11 +557,17 @@ def prepare_md_system(receptor_pdb: Path, ligand_sdf: Path, output_dir: Path):
     # Etapa G: Definição da Caixa
     yield "G", "start"
     cmd_editconf = [
-        gmx_bin, "editconf",
-        "-f", "complex.gro",
-        "-o", "complex_box.gro",
-        "-c", "-d", "1.0",
-        "-bt", "dodecahedron"
+        gmx_bin,
+        "editconf",
+        "-f",
+        "complex.gro",
+        "-o",
+        "complex_box.gro",
+        "-c",
+        "-d",
+        "1.0",
+        "-bt",
+        "dodecahedron",
     ]
     run_command(cmd_editconf, output_dir, step_name="Etapa G (Definição da Caixa)")
     yield "G", "success"
@@ -503,11 +575,16 @@ def prepare_md_system(receptor_pdb: Path, ligand_sdf: Path, output_dir: Path):
     # Etapa H: Solvatação
     yield "H", "start"
     cmd_solvate = [
-        gmx_bin, "solvate",
-        "-cp", "complex_box.gro",
-        "-cs", "spc216.gro",
-        "-o", "complex_solv.gro",
-        "-p", "topol.top"
+        gmx_bin,
+        "solvate",
+        "-cp",
+        "complex_box.gro",
+        "-cs",
+        "spc216.gro",
+        "-o",
+        "complex_solv.gro",
+        "-p",
+        "topol.top",
     ]
     run_command(cmd_solvate, output_dir, step_name="Etapa H (Solvatação)")
     yield "H", "success"
@@ -520,17 +597,27 @@ def prepare_md_system(receptor_pdb: Path, ligand_sdf: Path, output_dir: Path):
         if not minim_mdp.exists():
             minim_mdp = Path("src/templates/mdp/minim.mdp").resolve()
             if not minim_mdp.exists():
-                raise FileNotFoundError(f"Arquivo minim.mdp não encontrado no caminho esperado.")
-        
+                raise FileNotFoundError(
+                    "Arquivo minim.mdp não encontrado no caminho esperado."
+                )
+
         cmd_grompp_ions = [
-            gmx_bin, "grompp",
-            "-f", str(minim_mdp),
-            "-c", "complex_solv.gro",
-            "-p", "topol.top",
-            "-o", "ions.tpr",
-            "-maxwarn", "1"
+            gmx_bin,
+            "grompp",
+            "-f",
+            str(minim_mdp),
+            "-c",
+            "complex_solv.gro",
+            "-p",
+            "topol.top",
+            "-o",
+            "ions.tpr",
+            "-maxwarn",
+            "1",
         ]
-        run_command(cmd_grompp_ions, output_dir, step_name="Etapa I (Compilação de Íons)")
+        run_command(
+            cmd_grompp_ions, output_dir, step_name="Etapa I (Compilação de Íons)"
+        )
     except Exception as e:
         if isinstance(e, SimulationPrepError):
             raise e
@@ -540,16 +627,28 @@ def prepare_md_system(receptor_pdb: Path, ligand_sdf: Path, output_dir: Path):
     # Etapa J: Neutralização Automatizada
     yield "J", "start"
     cmd_genion = [
-        gmx_bin, "genion",
-        "-s", "ions.tpr",
-        "-o", "complex_ions.gro",
-        "-p", "topol.top",
-        "-pname", "NA",
-        "-nname", "CL",
+        gmx_bin,
+        "genion",
+        "-s",
+        "ions.tpr",
+        "-o",
+        "complex_ions.gro",
+        "-p",
+        "topol.top",
+        "-pname",
+        "NA",
+        "-nname",
+        "CL",
         "-neutral",
-        "-conc", "0.15"
+        "-conc",
+        "0.15",
     ]
-    run_command(cmd_genion, output_dir, input_val=b"15\n", step_name="Etapa J (Neutralização Automatizada)")
+    run_command(
+        cmd_genion,
+        output_dir,
+        input_val=b"15\n",
+        step_name="Etapa J (Neutralização Automatizada)",
+    )
     yield "J", "success"
 
     # Etapa K: Grompp Definitivo
@@ -560,14 +659,21 @@ def prepare_md_system(receptor_pdb: Path, ligand_sdf: Path, output_dir: Path):
         if not minim_mdp.exists():
             minim_mdp = Path("src/templates/mdp/minim.mdp").resolve()
             if not minim_mdp.exists():
-                raise FileNotFoundError(f"Arquivo minim.mdp não encontrado no caminho esperado.")
-                
+                raise FileNotFoundError(
+                    "Arquivo minim.mdp não encontrado no caminho esperado."
+                )
+
         cmd_grompp_em = [
-            gmx_bin, "grompp",
-            "-f", str(minim_mdp),
-            "-c", "complex_ions.gro",
-            "-p", "topol.top",
-            "-o", "em.tpr"
+            gmx_bin,
+            "grompp",
+            "-f",
+            str(minim_mdp),
+            "-c",
+            "complex_ions.gro",
+            "-p",
+            "topol.top",
+            "-o",
+            "em.tpr",
         ]
         run_command(cmd_grompp_em, output_dir, step_name="Etapa K (Grompp Definitivo)")
     except Exception as e:
@@ -578,10 +684,6 @@ def prepare_md_system(receptor_pdb: Path, ligand_sdf: Path, output_dir: Path):
 
     # Etapa L: Minimização de Energia
     yield "L", "start"
-    cmd_mdrun = [
-        gmx_bin, "mdrun",
-        "-v",
-        "-deffnm", "em"
-    ]
+    cmd_mdrun = [gmx_bin, "mdrun", "-v", "-deffnm", "em"]
     run_command(cmd_mdrun, output_dir, step_name="Etapa L (Minimização de Energia)")
     yield "L", "success"

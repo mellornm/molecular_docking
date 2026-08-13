@@ -11,7 +11,9 @@ def calculate_admet_descriptors(ligand_sdf: Path) -> dict:
     """
     ligand_sdf = Path(ligand_sdf)
     if not ligand_sdf.exists():
-        raise FileNotFoundError(f"Arquivo SDF do ligante não encontrado em: {ligand_sdf}")
+        raise FileNotFoundError(
+            f"Arquivo SDF do ligante não encontrado em: {ligand_sdf}"
+        )
 
     try:
         suppl = Chem.SDMolSupplier(str(ligand_sdf))
@@ -24,7 +26,9 @@ def calculate_admet_descriptors(ligand_sdf: Path) -> dict:
         raise RuntimeError(f"Erro ao ler o arquivo SDF com o RDKit: {e}")
 
     if mol is None:
-        raise ValueError(f"RDKit não conseguiu identificar uma molécula válida no arquivo: {ligand_sdf}")
+        raise ValueError(
+            f"RDKit não conseguiu identificar uma molécula válida no arquivo: {ligand_sdf}"
+        )
 
     try:
         # Cálculo dos descritores físico-químicos com RDKit
@@ -36,7 +40,9 @@ def calculate_admet_descriptors(ligand_sdf: Path) -> dict:
         rotb = int(Descriptors.NumRotatableBonds(mol))
         charge = int(Chem.GetFormalCharge(mol))
     except Exception as e:
-        raise RuntimeError(f"Erro ao calcular os descritores moleculares com RDKit: {e}")
+        raise RuntimeError(
+            f"Erro ao calcular os descritores moleculares com RDKit: {e}"
+        )
 
     # Validação da Regra de Cinco de Lipinski
     lipinski_violations = []
@@ -73,7 +79,11 @@ def calculate_admet_descriptors(ligand_sdf: Path) -> dict:
     # 3. Substrato de P-glicoproteína (P-gp) - Modelo baseado em carga/tamanho
     # Moléculas com MW > 400 e TPSA > 80 tendem a ser substratos (efluxo provável)
     pgp_substrate = (mw > 400.0) and (tpsa > 80.0)
-    pgp_status = "Substrato (Efluxo provável)" if pgp_substrate else "Não Substrato (Baixo Efluxo)"
+    pgp_status = (
+        "Substrato (Efluxo provável)"
+        if pgp_substrate
+        else "Não Substrato (Baixo Efluxo)"
+    )
 
     # 4. Alerta de Toxicidade (PAINS e Subestruturas Tóxicas/Reativas)
     toxic_alerts = []
@@ -85,7 +95,7 @@ def calculate_admet_descriptors(ligand_sdf: Path) -> dict:
         "Aldeído Alifático": "[CH1](=O)",
         "Nitrogrupo": "[$([NX3](=O)=O),$([NX3+](=O)[O-])]",
         "Hidrazina": "[NX3][NX3]",
-        "Tiocarbonila": "C=S"
+        "Tiocarbonila": "C=S",
     }
     for name, smarts in TOX_ALERTS.items():
         patt = Chem.MolFromSmarts(smarts)

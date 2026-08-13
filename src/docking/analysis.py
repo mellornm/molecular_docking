@@ -187,23 +187,41 @@ def parse_plip_xml(xml_path: Path):
                     resnr_el = hb.find("resnr")
                     restype_el = hb.find("restype")
                     dist_d_a_el = hb.find("dist_d-a")  # Distância Doador-Aceitador
-                    dist_h_a_el = hb.find("dist_h-a")  # Backup: Distância Hidrogênio-Aceitador
+                    dist_h_a_el = hb.find(
+                        "dist_h-a"
+                    )  # Backup: Distância Hidrogênio-Aceitador
 
                     if resnr_el is not None and restype_el is not None:
-                        resname = restype_el.text.strip() if restype_el.text and restype_el.text.strip() else "UNK"
-                        
+                        resname = (
+                            restype_el.text.strip()
+                            if restype_el.text and restype_el.text.strip()
+                            else "UNK"
+                        )
+
                         try:
-                            resnr = int(resnr_el.text.strip()) if resnr_el.text and resnr_el.text.strip() else 0
+                            resnr = (
+                                int(resnr_el.text.strip())
+                                if resnr_el.text and resnr_el.text.strip()
+                                else 0
+                            )
                         except ValueError:
                             resnr = 0
 
                         dist = 0.0
-                        if dist_d_a_el is not None and dist_d_a_el.text and dist_d_a_el.text.strip():
+                        if (
+                            dist_d_a_el is not None
+                            and dist_d_a_el.text
+                            and dist_d_a_el.text.strip()
+                        ):
                             try:
                                 dist = float(dist_d_a_el.text.strip())
                             except ValueError:
                                 dist = 0.0
-                        elif dist_h_a_el is not None and dist_h_a_el.text and dist_h_a_el.text.strip():
+                        elif (
+                            dist_h_a_el is not None
+                            and dist_h_a_el.text
+                            and dist_h_a_el.text.strip()
+                        ):
                             try:
                                 dist = float(dist_h_a_el.text.strip())
                             except ValueError:
@@ -226,15 +244,27 @@ def parse_plip_xml(xml_path: Path):
                     dist_el = hc.find("dist")
 
                     if resnr_el is not None and restype_el is not None:
-                        resname = restype_el.text.strip() if restype_el.text and restype_el.text.strip() else "UNK"
-                        
+                        resname = (
+                            restype_el.text.strip()
+                            if restype_el.text and restype_el.text.strip()
+                            else "UNK"
+                        )
+
                         try:
-                            resnr = int(resnr_el.text.strip()) if resnr_el.text and resnr_el.text.strip() else 0
+                            resnr = (
+                                int(resnr_el.text.strip())
+                                if resnr_el.text and resnr_el.text.strip()
+                                else 0
+                            )
                         except ValueError:
                             resnr = 0
 
                         dist = 0.0
-                        if dist_el is not None and dist_el.text and dist_el.text.strip():
+                        if (
+                            dist_el is not None
+                            and dist_el.text
+                            and dist_el.text.strip()
+                        ):
                             try:
                                 dist = float(dist_el.text.strip())
                             except ValueError:
@@ -257,6 +287,7 @@ def parse_plip_xml(xml_path: Path):
 
     except Exception as e:
         import traceback
+
         print(f"[DEBUG] Ocorreu uma exceção ao fazer o parsing do XML: {e}")
         traceback.print_exc()
 

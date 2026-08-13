@@ -549,8 +549,10 @@ def interactive():
                 "4. Triagem Virtual (Screening)",
                 "5. Preparar Dinâmica Molecular (GROMACS)",
                 "6. Rodar Equilíbrio da Dinâmica (NVT/NPT)",
-                "7. Executar Produção e Análise da Dinâmica (100 ns)",
-                "8. Sair",
+                "7. Compilar TPR de Produção (grompp -> md.tpr)",
+                "8. Executar Produção da Dinâmica (100 ns)",
+                "9. Pós-processamento, Gráficos e MM-PBSA da DM",
+                "10. Sair",
             ],
         ).ask()
 
@@ -863,7 +865,7 @@ def interactive():
                     )
                 )
 
-        elif choice == "7. Executar Produção e Análise da Dinâmica (100 ns)":
+        elif choice == "7. Compilar TPR de Produção (grompp -> md.tpr)":
             md_dir_default = "data/md_files"
             md_dir = questionary.text(
                 "Diretório de trabalho da Dinâmica Molecular (onde contêm npt.gro e topol.top):",
@@ -879,20 +881,22 @@ def interactive():
             try:
                 console.print(
                     Panel.fit(
-                        f"[bold blue]Produção e Análise de Dinâmica Molecular (GROMACS)[/bold blue]\n"
+                        f"[bold blue]Compilação do Arquivo de Produção (md.tpr)[/bold blue]\n"
                         f"Diretório de Trabalho: {md_dir}",
                         border_style="blue",
                     )
                 )
 
-                console.print("[yellow]Iniciando a produção da Dinâmica Molecular (grompp & mdrun)...[/yellow]")
-                md_analysis.run_production_md(Path(md_dir))
-                console.print("[bold green]✓ Produção concluída com sucesso![/bold green]")
-                
-                console.print("[yellow]Iniciando a análise da trajetória (RMSD, RMSF, Pontes de Hidrogênio)...[/yellow]")
-                md_analysis.analyze_trajectory(Path(md_dir))
-                console.print("[bold green]✓ Análise da trajetória concluída com sucesso![/bold green]")
-                console.print(f"Arquivos de análise gerados em: [cyan]{md_dir}[/cyan]")
+                console.print(
+                    "[yellow]Compilando md.tpr via GROMACS (grompp)...[/yellow]"
+                )
+                tpr_path = md_analysis.compile_production_tpr(Path(md_dir))
+                console.print(
+                    f"[bold green]✓ Arquivo 'md.tpr' gerado com sucesso em:[/bold green] [cyan]{tpr_path}[/cyan]"
+                )
+                console.print(
+                    "[dim]Agora você pode rodar a produção (opção 8) ou transferir o md.tpr para um servidor/cluster com GPU.[/dim]"
+                )
 
             except md_prep.DependencyError as e:
                 console.print(
@@ -905,9 +909,75 @@ def interactive():
             except md_prep.SimulationPrepError as e:
                 console.print(
                     Panel(
-                        f"[bold red]Erro de Execução/Análise no GROMACS:[/bold red]\n{e}",
+                        f"[bold red]Erro na Compilação do md.tpr:[/bold red]\n{e}",
                         border_style="red",
-                        title="Falha na Simulação/Análise",
+                        title="Falha no grompp",
+                    )
+                )
+            except FileNotFoundError as e:
+                console.print(
+                    Panel(
+                        f"[bold red]Arquivo/Diretório Não Encontrado:[/bold red]\n{e}",
+                        border_style="red",
+                        title="Erro de Caminho",
+                    )
+                )
+            except Exception as e:
+                console.print(
+                    Panel(
+                        f"[bold red]Erro Inesperado na Compilação:[/bold red]\n{e}",
+                        border_style="red",
+                        title="Falha Crítica",
+                    )
+                )
+
+        elif choice == "8. Executar Produção da Dinâmica (100 ns)":
+            md_dir_default = "data/md_files"
+            md_dir = questionary.text(
+                "Diretório de trabalho da Dinâmica Molecular (onde contêm npt.gro e topol.top):",
+                default=md_dir_default,
+            ).ask()
+
+            if not md_dir:
+                console.print(
+                    "[bold red]Operação cancelada: o diretório de trabalho deve ser preenchido.[/bold red]"
+                )
+                continue
+
+            try:
+                console.print(
+                    Panel.fit(
+                        f"[bold blue]Produção de Dinâmica Molecular (GROMACS)[/bold blue]\n"
+                        f"Diretório de Trabalho: {md_dir}",
+                        border_style="blue",
+                    )
+                )
+
+                console.print(
+                    "[yellow]Iniciando a produção da Dinâmica Molecular (grompp & mdrun)...[/yellow]"
+                )
+                md_analysis.run_production_md(Path(md_dir))
+                console.print(
+                    "[bold green]✓ Produção concluída com sucesso![/bold green]"
+                )
+                console.print(
+                    "[cyan]Execute a opção 9 para tratamento de PBC, gráficos e MM-PBSA.[/cyan]"
+                )
+
+            except md_prep.DependencyError as e:
+                console.print(
+                    Panel(
+                        f"[bold red]Erro de Dependência GROMACS:[/bold red]\n{e}",
+                        border_style="red",
+                        title="Falha de Dependência",
+                    )
+                )
+            except md_prep.SimulationPrepError as e:
+                console.print(
+                    Panel(
+                        f"[bold red]Erro de Execução no GROMACS:[/bold red]\n{e}",
+                        border_style="red",
+                        title="Falha na Simulação",
                     )
                 )
             except FileNotFoundError as e:
@@ -927,42 +997,362 @@ def interactive():
                     )
                 )
 
-        elif choice == "8. Sair":
+        elif choice == "9. Pós-processamento, Gráficos e MM-PBSA da DM":
+            md_dir_default = "data/md_files"
+            md_dir = questionary.text(
+                "Diretório de trabalho da Dinâmica Molecular (onde contêm md.tpr e md.xtc):",
+                default=md_dir_default,
+            ).ask()
+
+            if not md_dir:
+                console.print(
+                    "[bold red]Operação cancelada: o diretório de trabalho deve ser preenchido.[/bold red]"
+                )
+                continue
+
+            run_mmpbsa = questionary.confirm(
+                "Deseja executar o cálculo de Energia Livre de Ligação MM-PBSA?",
+                default=True,
+            ).ask()
+
+            try:
+                console.print(
+                    Panel.fit(
+                        f"[bold blue]Pós-processamento, Gráficos e MM-PBSA da Dinâmica Molecular[/bold blue]\n"
+                        f"Diretório de Trabalho: {md_dir}",
+                        border_style="blue",
+                    )
+                )
+
+                with Progress(
+                    SpinnerColumn(),
+                    TextColumn("[progress.description]{task.description}"),
+                    console=console,
+                ) as progress:
+                    task_pbc = progress.add_task(
+                        description="[A] Tratamento de PBC (nojump e centralização na proteína)",
+                        total=1,
+                    )
+                    md_analysis.fix_pbc(Path(md_dir))
+                    progress.update(task_pbc, completed=1)
+
+                    task_traj = progress.add_task(
+                        description="[B] Análise da Trajetória Corrigida (RMSD, RMSF, HBond)",
+                        total=1,
+                    )
+                    md_analysis.analyze_trajectory(Path(md_dir))
+                    progress.update(task_traj, completed=1)
+
+                    task_plot = progress.add_task(
+                        description="[C] Geração de Gráficos Científicos de Publicação (300 DPI)",
+                        total=1,
+                    )
+                    plots = md_analysis.plot_md_results(Path(md_dir))
+                    progress.update(task_plot, completed=1)
+
+                    mmpbsa_res = None
+                    if run_mmpbsa:
+                        task_mmpbsa = progress.add_task(
+                            description="[D] Cálculo de Energia Livre MM-PBSA (gmx_MMPBSA)",
+                            total=1,
+                        )
+                        mmpbsa_res = md_analysis.calculate_mmpbsa(Path(md_dir))
+                        progress.update(task_mmpbsa, completed=1)
+
+                console.print(
+                    "\n[bold green]✓ Pós-processamento concluído com sucesso![/bold green]"
+                )
+
+                if plots:
+                    console.print(
+                        "\n[bold cyan]Gráficos de Publicação Gerados:[/bold cyan]"
+                    )
+                    for p_name, p_path in plots.items():
+                        console.print(
+                            f"  • [bold]{p_name.upper()}:[/bold] [green]{p_path}[/green]"
+                        )
+
+                if mmpbsa_res and "energies" in mmpbsa_res:
+                    table = Table(
+                        title="Resumo Termodinâmico de Energia Livre MM-PBSA",
+                        show_header=True,
+                        header_style="bold magenta",
+                    )
+                    table.add_column("Componente Energético", style="dim", width=32)
+                    table.add_column(
+                        f"Energia ({mmpbsa_res.get('unit', 'kcal/mol')})",
+                        justify="right",
+                    )
+
+                    energies = mmpbsa_res["energies"]
+                    table.add_row(
+                        "Van der Waals (ΔE_vdw)",
+                        f"{energies['van_der_waals']['mean']:.2f} ± {energies['van_der_waals']['std']:.2f}",
+                    )
+                    table.add_row(
+                        "Eletrostática (ΔE_elec)",
+                        f"{energies['electrostatic']['mean']:.2f} ± {energies['electrostatic']['std']:.2f}",
+                    )
+                    table.add_row(
+                        "Solvatação Polar (ΔG_polar)",
+                        f"{energies['polar_solvation']['mean']:.2f} ± {energies['polar_solvation']['std']:.2f}",
+                    )
+                    table.add_row(
+                        "Solvatação Apolar (ΔG_apolar)",
+                        f"{energies['nonpolar_solvation']['mean']:.2f} ± {energies['nonpolar_solvation']['std']:.2f}",
+                    )
+                    table.add_section()
+                    table.add_row(
+                        "[bold]ΔG Total de Ligação (ΔG_bind)[/bold]",
+                        f"[bold green]{energies['delta_g_binding']['mean']:.2f} ± {energies['delta_g_binding']['std']:.2f}[/bold green]",
+                    )
+
+                    console.print(table)
+                    console.print(
+                        f"Sumário JSON salvo em: [cyan]{Path(md_dir) / 'mmpbsa_summary.json'}[/cyan]"
+                    )
+
+            except md_prep.DependencyError as e:
+                console.print(
+                    Panel(
+                        f"[bold red]Erro de Dependência GROMACS/gmx_MMPBSA:[/bold red]\n{e}",
+                        border_style="red",
+                        title="Falha de Dependência",
+                    )
+                )
+            except md_prep.SimulationPrepError as e:
+                console.print(
+                    Panel(
+                        f"[bold red]Erro no Pós-processamento / MM-PBSA:[/bold red]\n{e}",
+                        border_style="red",
+                        title="Falha na Análise",
+                    )
+                )
+            except FileNotFoundError as e:
+                console.print(
+                    Panel(
+                        f"[bold red]Arquivo/Diretório Não Encontrado:[/bold red]\n{e}",
+                        border_style="red",
+                        title="Erro de Caminho",
+                    )
+                )
+            except Exception as e:
+                console.print(
+                    Panel(
+                        f"[bold red]Erro Inesperado no Pós-processamento:[/bold red]\n{e}",
+                        border_style="red",
+                        title="Falha Crítica",
+                    )
+                )
+
+        elif choice == "10. Sair":
             break
 
 
-@app.command(name="md-run")
-def md_run_command(
+@app.command(name="md-compile")
+def md_compile_command(
     working_dir: Path = typer.Option(
-        ..., "--dir", help="Diretório de trabalho onde estão os arquivos do equilíbrio (nvt/npt)"
+        ...,
+        "--dir",
+        help="Diretório de trabalho contendo os arquivos do equilíbrio (npt.gro, topol.top, etc.)",
     ),
 ):
     """
-    PRODUÇÃO E ANÁLISE DE DINÂMICA MOLECULAR:
-    Compila e executa a produção da Dinâmica Molecular no GROMACS e gera as análises de trajetória (RMSD, RMSF, HBond).
+    COMPILAÇÃO DO ARQUIVO DE PRODUÇÃO (md.tpr):
+    Executa o 'gmx grompp' para compilar o arquivo de produção md.tpr sem iniciar a simulação.
     """
     console.print(
         Panel.fit(
-            f"[bold blue]Produção e Análise de Dinâmica Molecular (GROMACS)[/bold blue]\n"
+            f"[bold blue]Compilação do Arquivo de Produção (md.tpr)[/bold blue]\n"
             f"Diretório de Trabalho: {working_dir}",
             border_style="blue",
         )
     )
 
     try:
-        console.print("[yellow]Iniciando a produção da Dinâmica Molecular (grompp & mdrun)...[/yellow]")
-        md_analysis.run_production_md(working_dir)
-        console.print("[bold green]✓ Produção concluída com sucesso![/bold green]")
-        
-        console.print("[yellow]Iniciando a análise da trajetória (RMSD, RMSF, Pontes de Hidrogênio)...[/yellow]")
-        md_analysis.analyze_trajectory(working_dir)
-        console.print("[bold green]✓ Análise da trajetória concluída com sucesso![/bold green]")
-        console.print(f"Arquivos de análise gerados em: [cyan]{working_dir}[/cyan]")
+        console.print("[yellow]Compilando md.tpr via GROMACS (grompp)...[/yellow]")
+        tpr_path = md_analysis.compile_production_tpr(working_dir)
+        console.print(
+            f"[bold green]✓ Arquivo 'md.tpr' gerado com sucesso em:[/bold green] [cyan]{tpr_path}[/cyan]"
+        )
+        console.print(
+            "[dim]Você pode transferir este arquivo para execução em GPU/cluster ou rodar 'md-run'.[/dim]"
+        )
     except md_prep.DependencyError as e:
         console.print(f"\n[bold red]Erro de Dependência:[/bold red]\n{e}")
         raise typer.Exit(code=1)
     except md_prep.SimulationPrepError as e:
-        console.print(f"\n[bold red]Erro na Dinâmica/Análise:[/bold red]\n{e}")
+        console.print(f"\n[bold red]Erro na Compilação:[/bold red]\n{e}")
+        raise typer.Exit(code=1)
+    except FileNotFoundError as e:
+        console.print(f"\n[bold red]Arquivo Não Encontrado:[/bold red]\n{e}")
+        raise typer.Exit(code=1)
+    except Exception as e:
+        console.print(f"\n[bold red]Erro Inesperado:[/bold red]\n{e}")
+        raise typer.Exit(code=1)
+
+
+@app.command(name="md-run")
+def md_run_command(
+    working_dir: Path = typer.Option(
+        ...,
+        "--dir",
+        help="Diretório de trabalho onde estão os arquivos do equilíbrio (nvt/npt)",
+    ),
+):
+    """
+    PRODUÇÃO DE DINÂMICA MOLECULAR:
+    Compila e executa a produção da Dinâmica Molecular no GROMACS (grompp e mdrun).
+    """
+    console.print(
+        Panel.fit(
+            f"[bold blue]Produção de Dinâmica Molecular (GROMACS)[/bold blue]\n"
+            f"Diretório de Trabalho: {working_dir}",
+            border_style="blue",
+        )
+    )
+
+    try:
+        console.print(
+            "[yellow]Iniciando a produção da Dinâmica Molecular (grompp & mdrun)...[/yellow]"
+        )
+        md_analysis.run_production_md(working_dir)
+        console.print("[bold green]✓ Produção concluída com sucesso![/bold green]")
+        console.print(
+            f"[cyan]Execute 'md-postprocess --dir {working_dir}' para realizar o tratamento de PBC, gráficos e MM-PBSA.[/cyan]"
+        )
+    except md_prep.DependencyError as e:
+        console.print(f"\n[bold red]Erro de Dependência:[/bold red]\n{e}")
+        raise typer.Exit(code=1)
+    except md_prep.SimulationPrepError as e:
+        console.print(f"\n[bold red]Erro na Dinâmica:[/bold red]\n{e}")
+        raise typer.Exit(code=1)
+    except FileNotFoundError as e:
+        console.print(f"\n[bold red]Arquivo Não Encontrado:[/bold red]\n{e}")
+        raise typer.Exit(code=1)
+    except Exception as e:
+        console.print(f"\n[bold red]Erro Inesperado:[/bold red]\n{e}")
+        raise typer.Exit(code=1)
+
+
+@app.command(name="md-postprocess")
+def md_postprocess_command(
+    working_dir: Path = typer.Option(
+        ...,
+        "--dir",
+        help="Diretório de trabalho contendo os arquivos de simulação (md.tpr, md.xtc, etc.)",
+    ),
+    skip_mmpbsa: bool = typer.Option(
+        False, "--skip-mmpbsa", help="Pular o cálculo de energia livre MM-PBSA"
+    ),
+):
+    """
+    PÓS-PROCESSAMENTO, GRÁFICOS E MM-PBSA DA DINÂMICA MOLECULAR:
+    1. Tratamento de Condições Periódicas de Contorno (PBC: remoção de saltos e centralização).
+    2. Análise de trajetória (RMSD, RMSF, HBond) utilizando a trajetória corrigida (md_fit.xtc).
+    3. Geração automatizada de gráficos científicos (.png a 300 DPI) para publicação.
+    4. Cálculo de energia livre de ligação MM-PBSA (gmx_MMPBSA) e exportação de mmpbsa_summary.json.
+    """
+    working_dir = Path(working_dir)
+    console.print(
+        Panel.fit(
+            f"[bold blue]Pós-processamento, Gráficos e MM-PBSA da Dinâmica Molecular[/bold blue]\n"
+            f"Diretório de Trabalho: {working_dir}",
+            border_style="blue",
+        )
+    )
+
+    try:
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console,
+        ) as progress:
+            task_pbc = progress.add_task(
+                description="[1/4] Tratamento de Condições Periódicas de Contorno (PBC)...",
+                total=1,
+            )
+            md_analysis.fix_pbc(working_dir)
+            progress.update(task_pbc, completed=1)
+
+            task_traj = progress.add_task(
+                description="[2/4] Execução das Análises de Trajetória (RMSD, RMSF, HBond)...",
+                total=1,
+            )
+            md_analysis.analyze_trajectory(working_dir)
+            progress.update(task_traj, completed=1)
+
+            task_plot = progress.add_task(
+                description="[3/4] Geração de Gráficos Científicos de Publicação (300 DPI)...",
+                total=1,
+            )
+            plots = md_analysis.plot_md_results(working_dir)
+            progress.update(task_plot, completed=1)
+
+            mmpbsa_res = None
+            if not skip_mmpbsa:
+                task_mmpbsa = progress.add_task(
+                    description="[4/4] Cálculo de Energia Livre de Ligação MM-PBSA (gmx_MMPBSA)...",
+                    total=1,
+                )
+                mmpbsa_res = md_analysis.calculate_mmpbsa(working_dir)
+                progress.update(task_mmpbsa, completed=1)
+
+        console.print(
+            "\n[bold green]✓ Pós-processamento concluído com sucesso![/bold green]"
+        )
+
+        if plots:
+            console.print("\n[bold cyan]Gráficos Gerados:[/bold cyan]")
+            for p_name, p_path in plots.items():
+                console.print(
+                    f"  • [bold]{p_name.upper()}:[/bold] [green]{p_path}[/green]"
+                )
+
+        if mmpbsa_res and "energies" in mmpbsa_res:
+            table = Table(
+                title="Resultados Termodinâmicos MM-PBSA",
+                show_header=True,
+                header_style="bold magenta",
+            )
+            table.add_column("Componente Energético", style="dim", width=32)
+            table.add_column(
+                f"Energia ({mmpbsa_res.get('unit', 'kcal/mol')})", justify="right"
+            )
+
+            energies = mmpbsa_res["energies"]
+            table.add_row(
+                "Van der Waals (ΔE_vdw)",
+                f"{energies['van_der_waals']['mean']:.2f} ± {energies['van_der_waals']['std']:.2f}",
+            )
+            table.add_row(
+                "Eletrostática (ΔE_elec)",
+                f"{energies['electrostatic']['mean']:.2f} ± {energies['electrostatic']['std']:.2f}",
+            )
+            table.add_row(
+                "Solvatação Polar (ΔG_polar)",
+                f"{energies['polar_solvation']['mean']:.2f} ± {energies['polar_solvation']['std']:.2f}",
+            )
+            table.add_row(
+                "Solvatação Apolar (ΔG_apolar)",
+                f"{energies['nonpolar_solvation']['mean']:.2f} ± {energies['nonpolar_solvation']['std']:.2f}",
+            )
+            table.add_section()
+            table.add_row(
+                "[bold]ΔG Total de Ligação (ΔG_bind)[/bold]",
+                f"[bold green]{energies['delta_g_binding']['mean']:.2f} ± {energies['delta_g_binding']['std']:.2f}[/bold green]",
+            )
+
+            console.print(table)
+            console.print(
+                f"Sumário JSON salvo em: [cyan]{working_dir / 'mmpbsa_summary.json'}[/cyan]"
+            )
+
+    except md_prep.DependencyError as e:
+        console.print(f"\n[bold red]Erro de Dependência:[/bold red]\n{e}")
+        raise typer.Exit(code=1)
+    except md_prep.SimulationPrepError as e:
+        console.print(f"\n[bold red]Erro no Pós-processamento:[/bold red]\n{e}")
         raise typer.Exit(code=1)
     except FileNotFoundError as e:
         console.print(f"\n[bold red]Arquivo Não Encontrado:[/bold red]\n{e}")
