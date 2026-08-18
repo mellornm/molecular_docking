@@ -19,6 +19,8 @@ from docking import (
     md_prep,
     md_equil,
     md_analysis,
+    report,
+    visualization,
 )
 from docking.preparation import get_executable
 
@@ -552,7 +554,8 @@ def interactive():
                 "7. Compilar TPR de Produção (grompp -> md.tpr)",
                 "8. Executar Produção da Dinâmica (100 ns)",
                 "9. Pós-processamento, Gráficos e MM-PBSA da DM",
-                "10. Sair",
+                "10. Gerar Relatório Executivo (HTML) e Script PyMOL (3D)",
+                "11. Sair",
             ],
         ).ask()
 
@@ -1145,7 +1148,96 @@ def interactive():
                     )
                 )
 
-        elif choice == "10. Sair":
+        elif choice == "10. Gerar Relatório Executivo (HTML) e Script PyMOL (3D)":
+            # Sugere um diretório inteligente padrão se disponível
+            default_dir = "data/screening/desoxicolato"
+            if not Path(default_dir).exists():
+                default_dir = "data/1OSV/results"
+                if not Path(default_dir).exists():
+                    default_dir = "data/md_files"
+                    if not Path(default_dir).exists():
+                        default_dir = "data"
+
+            work_dir = questionary.text(
+                "Diretório contendo os artefatos do pipeline (docking, PLIP, ADMET, DM):",
+                default=default_dir,
+            ).ask()
+
+            if not work_dir:
+                console.print(
+                    "[bold red]Operação cancelada: o diretório de trabalho deve ser informado.[/bold red]"
+                )
+                continue
+
+            try:
+                console.print(
+                    Panel.fit(
+                        f"[bold blue]Geração de Relatório Executivo e Visualização 3D[/bold blue]\n"
+                        f"Diretório de Trabalho: {work_dir}",
+                        border_style="blue",
+                    )
+                )
+
+                with Progress(
+                    SpinnerColumn(),
+                    TextColumn("[progress.description]{task.description}"),
+                    console=console,
+                ) as progress:
+                    task_html = progress.add_task(
+                        description="[1/2] Compilando e gerando Relatório Executivo HTML...",
+                        total=1,
+                    )
+                    html_path, missing = report.generate_html_report(Path(work_dir))
+                    progress.update(task_html, completed=1)
+
+                    task_pymol = progress.add_task(
+                        description="[2/2] Gerando Script de Visualização PyMOL (.pml)...",
+                        total=1,
+                    )
+                    try:
+                        pml_path = visualization.generate_pymol_script(Path(work_dir))
+                    except Exception as e:
+                        pml_path = None
+                        missing.append(f"PyMOL Script: {e}")
+                    progress.update(task_pymol, completed=1)
+
+                console.print(
+                    "\n[bold green]✓ Entrega de Resultados Concluída com Sucesso![/bold green]"
+                )
+                console.print(
+                    f"  • [bold]Relatório HTML Consolidado:[/bold] [cyan]{html_path}[/cyan]"
+                )
+                if pml_path:
+                    console.print(
+                        f"  • [bold]Script PyMOL 3D:[/bold] [cyan]{pml_path}[/cyan]"
+                    )
+                    console.print(
+                        "    [dim]Para abrir a cena 3D no PyMOL, execute: pymol show_complex.pml[/dim]"
+                    )
+
+                if missing:
+                    console.print("\n[bold yellow]Avisos / Artefatos Ausentes:[/bold yellow]")
+                    for item in missing:
+                        console.print(f"  [yellow]⚠[/yellow] {item}")
+
+            except FileNotFoundError as e:
+                console.print(
+                    Panel(
+                        f"[bold red]Arquivo/Diretório Não Encontrado:[/bold red]\n{e}",
+                        border_style="red",
+                        title="Erro de Caminho",
+                    )
+                )
+            except Exception as e:
+                console.print(
+                    Panel(
+                        f"[bold red]Erro Inesperado na Geração de Relatórios:[/bold red]\n{e}",
+                        border_style="red",
+                        title="Falha Crítica",
+                    )
+                )
+
+        elif choice == "11. Sair":
             break
 
 
@@ -1478,5 +1570,81 @@ def md_prep_command(
         raise typer.Exit(code=1)
 
 
+@app.command(name="report")
+def report_command(
+    work_dir: Path = typer.Option(
+        ...,
+        "--dir",
+        help="Diretório de trabalho contendo os artefatos do pipeline (docking, PLIP, ADMET, DM)",
+    ),
+    output_html: Path = typer.Option(
+        None,
+        "--out",
+        help="Caminho personalizado para o relatório HTML (padrão: report.html dentro do diretório)",
+    ),
+):
+    """
+    RELATÓRIO EXECUTIVO (HTML) E VISUALIZAÇÃO 3D (PyMOL):
+    1. Consolida resultados de docking (Vina), PLIP, ADMET, Gráficos de DM e MM-PBSA em um relatório HTML moderno e autoconferível.
+    2. Gera o script PyMOL (.pml) automatizado para visualização 3D do complexo ligante-receptor e suas interações.
+    """
+    work_dir = Path(work_dir)
+    console.print(
+        Panel.fit(
+            f"[bold blue]Geração de Relatório Executivo e Visualização 3D[/bold blue]\n"
+            f"Diretório de Trabalho: {work_dir}",
+            border_style="blue",
+        )
+    )
+
+    if not work_dir.exists():
+        console.print(
+            f"[bold red]Erro:[/bold red] Diretório de trabalho não encontrado: {work_dir}"
+        )
+        raise typer.Exit(code=1)
+
+    try:
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console,
+        ) as progress:
+            task_html = progress.add_task(
+                description="[1/2] Compilando e gerando Relatório Executivo HTML...",
+                total=1,
+            )
+            html_path, missing = report.generate_html_report(work_dir, output_html)
+            progress.update(task_html, completed=1)
+
+            task_pymol = progress.add_task(
+                description="[2/2] Gerando Script de Visualização PyMOL (.pml)...",
+                total=1,
+            )
+            try:
+                pml_path = visualization.generate_pymol_script(work_dir)
+            except Exception as e:
+                pml_path = None
+                missing.append(f"PyMOL Script: {e}")
+            progress.update(task_pymol, completed=1)
+
+        console.print("\n[bold green]✓ Relatório e Script gerados com sucesso![/bold green]")
+        console.print(f"  • [bold]Relatório HTML:[/bold] [cyan]{html_path}[/cyan]")
+        if pml_path:
+            console.print(f"  • [bold]Script PyMOL (3D):[/bold] [cyan]{pml_path}[/cyan]")
+            console.print(
+                "    [dim]Para abrir a cena 3D, execute no terminal: pymol show_complex.pml[/dim]"
+            )
+
+        if missing:
+            console.print("\n[bold yellow]Avisos / Artefatos Ausentes:[/bold yellow]")
+            for item in missing:
+                console.print(f"  [yellow]⚠[/yellow] {item}")
+
+    except Exception as e:
+        console.print(f"\n[bold red]FATAL ERROR ao gerar relatório/script:[/bold red] {e}")
+        raise typer.Exit(code=1)
+
+
 if __name__ == "__main__":
     app()
+
