@@ -123,10 +123,13 @@ def parse_pipeline_artifacts(work_dir: Path) -> Tuple[Dict[str, Any], List[str]]
     # 3. Parse do Sumário MM-PBSA
     mmpbsa_file = _find_file(work_dir, ["mmpbsa_summary.json"])
     if not mmpbsa_file:
-        # Busca no diretório md_files caso esteja aninhado
-        md_dir = work_dir / "md_files"
-        if md_dir.exists():
-            mmpbsa_file = _find_file(md_dir, ["mmpbsa_summary.json"])
+        # Busca no diretório md_files caso esteja em subdiretório ou em diretórios pais/irmãos
+        for parent in [work_dir] + list(work_dir.parents):
+            candidate_md = parent / "md_files"
+            if candidate_md.exists():
+                mmpbsa_file = _find_file(candidate_md, ["mmpbsa_summary.json"])
+                if mmpbsa_file:
+                    break
 
     if mmpbsa_file and mmpbsa_file.exists():
         try:
@@ -141,9 +144,12 @@ def parse_pipeline_artifacts(work_dir: Path) -> Tuple[Dict[str, Any], List[str]]
     for plot_name in ["rmsd", "rmsf", "hbond"]:
         img_file = _find_file(work_dir, [f"{plot_name}.png"])
         if not img_file:
-            md_dir = work_dir / "md_files"
-            if md_dir.exists():
-                img_file = _find_file(md_dir, [f"{plot_name}.png"])
+            for parent in [work_dir] + list(work_dir.parents):
+                candidate_md = parent / "md_files"
+                if candidate_md.exists():
+                    img_file = _find_file(candidate_md, [f"{plot_name}.png"])
+                    if img_file:
+                        break
 
         if img_file and img_file.exists():
             b64_str = _find_image_base64(img_file)

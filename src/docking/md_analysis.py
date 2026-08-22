@@ -651,7 +651,7 @@ def parse_mmpbsa_dat(dat_path: Path) -> Dict[str, Any]:
     """
     Parse estruturado do arquivo de resultados FINAL_RESULTS_MMPBSA.dat gerado pelo gmx_MMPBSA.
     Extrai contribuições de Van der Waals, Eletrostática, Solvatação Polar e Apolar, e o Delta G total
-    a partir da coluna Delta de cada componente.
+    tanto para o modelo Generalized Born (MM-GBSA) quanto Poisson Boltzmann (MM-PBSA).
     """
     summary: Dict[str, Any] = {
         "unit": "kcal/mol",
@@ -662,6 +662,26 @@ def parse_mmpbsa_dat(dat_path: Path) -> Dict[str, Any]:
             "nonpolar_solvation": {"mean": 0.0, "std": 0.0},
             "delta_g_binding": {"mean": 0.0, "std": 0.0},
         },
+        "models": {
+            "gb": {
+                "van_der_waals": {"mean": 0.0, "std": 0.0},
+                "electrostatic": {"mean": 0.0, "std": 0.0},
+                "polar_solvation": {"mean": 0.0, "std": 0.0},
+                "nonpolar_solvation": {"mean": 0.0, "std": 0.0},
+                "gas_energy": {"mean": 0.0, "std": 0.0},
+                "solvation_energy": {"mean": 0.0, "std": 0.0},
+                "delta_g_binding": {"mean": 0.0, "std": 0.0},
+            },
+            "pb": {
+                "van_der_waals": {"mean": 0.0, "std": 0.0},
+                "electrostatic": {"mean": 0.0, "std": 0.0},
+                "polar_solvation": {"mean": 0.0, "std": 0.0},
+                "nonpolar_solvation": {"mean": 0.0, "std": 0.0},
+                "gas_energy": {"mean": 0.0, "std": 0.0},
+                "solvation_energy": {"mean": 0.0, "std": 0.0},
+                "delta_g_binding": {"mean": 0.0, "std": 0.0},
+            },
+        },
     }
 
     if not dat_path.exists():
@@ -670,77 +690,64 @@ def parse_mmpbsa_dat(dat_path: Path) -> Dict[str, Any]:
     with open(dat_path, "r", encoding="utf-8", errors="ignore") as f:
         lines = f.readlines()
 
+    current_model = None
+    in_delta_section = False
+
     for line in lines:
         line_clean = line.strip()
-        if not line_clean or line_clean.startswith("-") or line_clean.startswith("="):
+        if not line_clean:
             continue
 
-        # Extrai todos os pares 'valor +/- desvio' na linha
-        pairs = re.findall(r"([-\d\.]+)\s*\+/-\s*([-\d\.]+)", line_clean)
-        if not pairs:
+        if "GENERALIZED BORN:" in line_clean:
+            current_model = "gb"
+            in_delta_section = False
+            continue
+        elif "POISSON BOLTZMANN:" in line_clean:
+            current_model = "pb"
+            in_delta_section = False
             continue
 
-        # A coluna Delta é sempre o último par da linha
-        delta_mean, delta_std = float(pairs[-1][0]), float(pairs[-1][1])
-        upper_line = line_clean.upper()
+        if "Delta (Complex - Receptor - Ligand):" in line_clean:
+            in_delta_section = True
+            continue
 
-        if upper_line.startswith("VDWAALS") or "VAN DER WAALS" in upper_line:
-            summary["energies"]["van_der_waals"] = {
-                "mean": round(delta_mean, 4),
-                "std": round(delta_std, 4),
-            }
-        elif upper_line.startswith("EEL") or "ELECTROSTATIC" in upper_line:
-            summary["energies"]["electrostatic"] = {
-                "mean": round(delta_mean, 4),
-                "std": round(delta_std, 4),
-            }
-        elif (
-            upper_line.startswith("ENPOLAR")
-            or upper_line.startswith("EDISPER")
-            or upper_line.startswith("ESURF")
-            or upper_line.startswith("ECAVITY")
-            or "NONPOLAR" in upper_line
-            or "APOLAR" in upper_line
-        ):
-            summary["energies"]["nonpolar_solvation"] = {
-                "mean": round(delta_mean, 4),
-                "std": round(delta_std, 4),
-            }
-        elif (
-            upper_line.startswith("EPB")
-            or upper_line.startswith("EGB")
-            or "POLAR" in upper_line
-        ):
-            summary["energies"]["polar_solvation"] = {
-                "mean": round(delta_mean, 4),
-                "std": round(delta_std, 4),
-            }
-        elif (
-            "DELTA TOTAL" in upper_line
-            or "DELTA G" in upper_line
-            or upper_line.startswith("TOTAL")
-        ):
-            summary["energies"]["delta_g_binding"] = {
-                "mean": round(delta_mean, 4),
-                "std": round(delta_std, 4),
-            }
+        if in_delta_section and current_model:
+            cleaned_line = line_clean.replace("Δ", "").replace("Delta", "").strip()
+            parts = cleaned_line.split()
+            if len(parts) >= 3:
+                comp_name = parts[0].upper()
+                try:
+                    mean_val = float(parts[1])
+                    std_val = float(parts[3]) if len(parts) >= 4 else float(parts[2])
+                except ValueError:
+                    continue
 
-    # Se delta_g_binding não foi capturado diretamente pelo padrão final, calcula a soma das componentes
-    vdw = summary["energies"]["van_der_waals"]
-    eel = summary["energies"]["electrostatic"]
-    polar = summary["energies"]["polar_solvation"]
-    apolar = summary["energies"]["nonpolar_solvation"]
-    dg = summary["energies"]["delta_g_binding"]
+                target_dict = summary["models"][current_model]
+                if comp_name == "VDWAALS":
+                    target_dict["van_der_waals"] = {"mean": mean_val, "std": std_val}
+                elif comp_name == "EEL":
+                    target_dict["electrostatic"] = {"mean": mean_val, "std": std_val}
+                elif comp_name in ("EGB", "EPB"):
+                    target_dict["polar_solvation"] = {"mean": mean_val, "std": std_val}
+                elif comp_name in ("ESURF", "ENPOLAR"):
+                    target_dict["nonpolar_solvation"] = {"mean": mean_val, "std": std_val}
+                elif comp_name == "GGAS":
+                    target_dict["gas_energy"] = {"mean": mean_val, "std": std_val}
+                elif comp_name == "GSOLV":
+                    target_dict["solvation_energy"] = {"mean": mean_val, "std": std_val}
+                elif comp_name == "TOTAL":
+                    target_dict["delta_g_binding"] = {"mean": mean_val, "std": std_val}
 
-    if dg["mean"] == 0.0 and (vdw["mean"] != 0.0 or eel["mean"] != 0.0):
-        calc_mean = vdw["mean"] + eel["mean"] + polar["mean"] + apolar["mean"]
-        calc_std = (
-            vdw["std"] ** 2 + eel["std"] ** 2 + polar["std"] ** 2 + apolar["std"] ** 2
-        ) ** 0.5
-        summary["energies"]["delta_g_binding"] = {
-            "mean": round(calc_mean, 4),
-            "std": round(calc_std, 4),
-        }
+    gb = summary["models"]["gb"]
+    pb = summary["models"]["pb"]
+    primary = gb if gb["delta_g_binding"]["mean"] != 0.0 else pb
+    summary["energies"] = {
+        "van_der_waals": primary["van_der_waals"],
+        "electrostatic": primary["electrostatic"],
+        "polar_solvation": primary["polar_solvation"],
+        "nonpolar_solvation": primary["nonpolar_solvation"],
+        "delta_g_binding": primary["delta_g_binding"],
+    }
 
     return summary
 
@@ -795,11 +802,11 @@ def calculate_mmpbsa(working_dir: Path) -> Dict[str, Any]:
                 text=True,
             )
             chk_out = (chk_res.stderr or "") + "\n" + (chk_res.stdout or "")
-            match = re.search(
-                r"(?:Last frame|Step|Frames|frame)\s+(\d+)", chk_out, re.IGNORECASE
+            frame_matches = re.findall(
+                r"(?:Last\s+frame|Step|Coords|Time)\s+(\d+)", chk_out, re.IGNORECASE
             )
-            if match:
-                f_count = int(match.group(1))
+            if frame_matches:
+                f_count = max(int(m) for m in frame_matches)
                 if f_count > 0:
                     total_frames = f_count
         except Exception:
@@ -836,6 +843,7 @@ radiopt=0,
     cmd_mmpbsa = [
         mmpbsa_bin,
         "-O",
+        "-nogui",
         "-i",
         "mmpbsa.in",
         "-cs",
@@ -852,6 +860,18 @@ radiopt=0,
         "-eo",
         "FINAL_RESULTS_MMPBSA.csv",
     ]
+
+    # Identifica o arquivo mol2 parametrizado do ligante (gerado pelo ACPYPE)
+    mol2_candidates = (
+        list(working_dir.glob("*/*_bcc_gaff2.mol2"))
+        + list(working_dir.glob("*_bcc_gaff2.mol2"))
+        + list(working_dir.glob("*/*_AC.mol2"))
+        + list(working_dir.glob("*/*.mol2"))
+        + list(working_dir.glob("*.mol2"))
+    )
+    if mol2_candidates:
+        mol2_rel = mol2_candidates[0].resolve().relative_to(working_dir.resolve())
+        cmd_mmpbsa.extend(["-lm", str(mol2_rel).replace("\\", "/")])
 
     try:
         env = os.environ.copy()
