@@ -6,13 +6,13 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
-import matplotlib
+import matplotlib  # type: ignore[reportMissingImports]
 
 matplotlib.use("Agg")  # Backend não-interativo para renderização de imagens
-import matplotlib.pyplot as plt
+import matplotlib.pyplot as plt  # type: ignore[reportMissingImports]
 
 try:
-    import seaborn as sns
+    import seaborn as sns  # type: ignore[reportMissingImports]
 
     sns.set_theme(style="whitegrid")
 except ImportError:
@@ -22,7 +22,87 @@ except ImportError:
     except Exception:
         pass
 
-from docking.md_prep import find_executable, DependencyError, SimulationPrepError
+from docking.md_prep import DependencyError, SimulationPrepError, find_executable
+
+
+def get_index_groups(index_file: Path) -> List[str]:
+    """
+    Lê um arquivo index.ndx e retorna a lista ordenada de nomes de grupos presentes.
+    """
+    groups_list: List[str] = []
+    if not index_file.exists():
+        return groups_list
+    with open(index_file, "r", encoding="utf-8", errors="ignore") as f:
+        for line in f:
+            line = line.strip()
+            if line.startswith("[") and line.endswith("]"):
+                group_name = line[1:-1].strip()
+                groups_list.append(group_name)
+    return groups_list
+
+
+def identify_complex_groups(groups_list: List[str]) -> Tuple[str, str, int, int]:
+    """
+    Identifica o nome e os índices numéricos dos grupos de receptor (proteína) e ligante
+    a partir da lista de grupos do index.ndx.
+
+    No GROMACS e gmx_MMPBSA, a numeração é 0-based correspondente à ordem em index.ndx
+    (0 = System, 1 = Protein, ..., 13 = LIG).
+
+    Retorna: (prot_name, lig_name, prot_idx, lig_idx)
+    """
+    # 1. Identificação do receptor
+    if "Protein" in groups_list:
+        prot_name = "Protein"
+    elif "Protein-H" in groups_list:
+        prot_name = "Protein-H"
+    else:
+        prot_name = "Protein"
+
+    prot_idx = groups_list.index(prot_name) if prot_name in groups_list else 1
+
+    # 2. Identificação do ligante
+    lig_name = None
+    for candidate in ["ligand_md", "LIG", "UNL", "UNK", "MOL", "Other"]:
+        if candidate in groups_list:
+            lig_name = candidate
+            break
+
+    if not lig_name:
+        standard_groups = {
+            "System",
+            "Protein",
+            "Protein-H",
+            "C-alpha",
+            "Backbone",
+            "MainChain",
+            "MainChain+Cb",
+            "MainChain+H",
+            "SideChain",
+            "SideChain-H",
+            "Prot-Masses",
+            "non-Protein",
+            "Other",
+            "NA",
+            "CL",
+            "Ion",
+            "Water",
+            "SOL",
+            "non-Water",
+            "Water_and_ions",
+            "Protein_LIG",
+        }
+        for g in groups_list:
+            if g not in standard_groups:
+                lig_name = g
+                break
+
+    if not lig_name:
+        lig_name = "LIG" if "LIG" in groups_list else "ligand_md"
+
+    lig_idx = groups_list.index(lig_name) if lig_name in groups_list else 13
+
+    return prot_name, lig_name, prot_idx, lig_idx
 
 
 def compile_production_tpr(working_dir: Path) -> Path:
@@ -374,12 +454,19 @@ def analyze_trajectory(working_dir: Path):
         "-num",
         "hbond.xvg",
     ]
-    if (working_dir / "index.ndx").exists():
+    index_file = working_dir / "index.ndx"
+    if index_file.exists():
         cmd_hbond.extend(["-n", "index.ndx"])
+        groups_list = get_index_groups(index_file)
+        prot_name, lig_name, _, _ = identify_complex_groups(groups_list)
+        hbond_input = f"{prot_name}\n{lig_name}\n"
+    else:
+        hbond_input = "Protein\nLIG\n"
+
     run_analysis_cmd(
         cmd_hbond,
         working_dir,
-        "Protein ligand_md\n",
+        hbond_input,
         "Pontes de hidrogênio (Proteína-Ligante)",
     )
 
@@ -742,24 +829,8 @@ radiopt=0,
         f.write(mmpbsa_in_content)
 
     # 3. Identificação dos índices dos grupos no index.ndx
-    groups_list: List[str] = []
-    with open(index_file, "r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if line.startswith("[") and line.endswith("]"):
-                group_name = line[1:-1].strip()
-                groups_list.append(group_name)
-
-    rec_idx = 1
-    if "Protein" in groups_list:
-        rec_idx = groups_list.index("Protein") + 1
-
-    if "ligand_md" in groups_list:
-        lig_idx = groups_list.index("ligand_md") + 1
-    elif "LIG" in groups_list:
-        lig_idx = groups_list.index("LIG") + 1
-    else:
-        lig_idx = len(groups_list) if groups_list else 13
+    groups_list = get_index_groups(index_file)
+    _, _, rec_idx, lig_idx = identify_complex_groups(groups_list)
 
     # 4. Execução do gmx_MMPBSA
     cmd_mmpbsa = [
