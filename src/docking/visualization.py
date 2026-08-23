@@ -151,9 +151,7 @@ def generate_pymol_script(work_dir: Path) -> Path:
             resname = hb.get("resname", "RES")
             if resnr and resnr not in unique_hb_pairs:
                 unique_hb_pairs.add(resnr)
-                pml_lines.append(
-                    f"# H-Bond {resname} {resnr}"
-                )
+                pml_lines.append(f"# H-Bond {resname} {resnr}")
                 pml_lines.append(
                     f"distance hb_{resname}_{resnr}, (polymer and resi {resnr}), (resn LIG), 4.2, mode=2"
                 )

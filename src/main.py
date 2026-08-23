@@ -1216,7 +1216,9 @@ def interactive():
                     )
 
                 if missing:
-                    console.print("\n[bold yellow]Avisos / Artefatos Ausentes:[/bold yellow]")
+                    console.print(
+                        "\n[bold yellow]Avisos / Artefatos Ausentes:[/bold yellow]"
+                    )
                     for item in missing:
                         console.print(f"  [yellow]⚠[/yellow] {item}")
 
@@ -1627,10 +1629,14 @@ def report_command(
                 missing.append(f"PyMOL Script: {e}")
             progress.update(task_pymol, completed=1)
 
-        console.print("\n[bold green]✓ Relatório e Script gerados com sucesso![/bold green]")
+        console.print(
+            "\n[bold green]✓ Relatório e Script gerados com sucesso![/bold green]"
+        )
         console.print(f"  • [bold]Relatório HTML:[/bold] [cyan]{html_path}[/cyan]")
         if pml_path:
-            console.print(f"  • [bold]Script PyMOL (3D):[/bold] [cyan]{pml_path}[/cyan]")
+            console.print(
+                f"  • [bold]Script PyMOL (3D):[/bold] [cyan]{pml_path}[/cyan]"
+            )
             console.print(
                 "    [dim]Para abrir a cena 3D, execute no terminal: pymol show_complex.pml[/dim]"
             )
@@ -1641,10 +1647,11 @@ def report_command(
                 console.print(f"  [yellow]⚠[/yellow] {item}")
 
     except Exception as e:
-        console.print(f"\n[bold red]FATAL ERROR ao gerar relatório/script:[/bold red] {e}")
+        console.print(
+            f"\n[bold red]FATAL ERROR ao gerar relatório/script:[/bold red] {e}"
+        )
         raise typer.Exit(code=1)
 
 
 if __name__ == "__main__":
     app()
-

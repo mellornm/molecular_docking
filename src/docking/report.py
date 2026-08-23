@@ -88,7 +88,9 @@ def parse_pipeline_artifacts(work_dir: Path) -> Tuple[Dict[str, Any], List[str]]
                             data["vina_score"] = float(parts[1])
                             break
         except Exception as e:
-            warnings.append(f"Não foi possível ler o Score de Vina do log '{log_file.name}': {e}")
+            warnings.append(
+                f"Não foi possível ler o Score de Vina do log '{log_file.name}': {e}"
+            )
     else:
         warnings.append("Log do AutoDock Vina não encontrado no diretório.")
 
@@ -100,8 +102,12 @@ def parse_pipeline_artifacts(work_dir: Path) -> Tuple[Dict[str, Any], List[str]]
         try:
             with open(interactions_file, "r", encoding="utf-8") as f:
                 inter_json = json.load(f)
-                data["interactions"]["hydrogen_bonds"] = inter_json.get("hydrogen_bonds", [])
-                data["interactions"]["hydrophobic_contacts"] = inter_json.get("hydrophobic_contacts", [])
+                data["interactions"]["hydrogen_bonds"] = inter_json.get(
+                    "hydrogen_bonds", []
+                )
+                data["interactions"]["hydrophobic_contacts"] = inter_json.get(
+                    "hydrophobic_contacts", []
+                )
                 if "pharmacokinetics" in inter_json:
                     data["admet"] = inter_json["pharmacokinetics"]
         except Exception as e:
@@ -117,7 +123,10 @@ def parse_pipeline_artifacts(work_dir: Path) -> Tuple[Dict[str, Any], List[str]]
 
     if not data["admet"]:
         warnings.append("Dados farmacocinéticos (ADMET) não encontrados.")
-    if not data["interactions"]["hydrogen_bonds"] and not data["interactions"]["hydrophobic_contacts"]:
+    if (
+        not data["interactions"]["hydrogen_bonds"]
+        and not data["interactions"]["hydrophobic_contacts"]
+    ):
         warnings.append("Mapeamento de interações estruturais (PLIP) não encontrado.")
 
     # 3. Parse do Sumário MM-PBSA
@@ -138,7 +147,9 @@ def parse_pipeline_artifacts(work_dir: Path) -> Tuple[Dict[str, Any], List[str]]
         except Exception as e:
             warnings.append(f"Erro ao processar 'mmpbsa_summary.json': {e}")
     else:
-        warnings.append("Sumário de Energia Livre MM-PBSA (mmpbsa_summary.json) não encontrado.")
+        warnings.append(
+            "Sumário de Energia Livre MM-PBSA (mmpbsa_summary.json) não encontrado."
+        )
 
     # 4. Busca e Codificação de Gráficos de Dinâmica Molecular (PNG)
     for plot_name in ["rmsd", "rmsf", "hbond"]:
@@ -158,12 +169,16 @@ def parse_pipeline_artifacts(work_dir: Path) -> Tuple[Dict[str, Any], List[str]]
             else:
                 warnings.append(f"Falha ao codificar a imagem '{plot_name}.png'.")
         else:
-            warnings.append(f"Gráfico de Dinâmica Molecular '{plot_name}.png' não encontrado.")
+            warnings.append(
+                f"Gráfico de Dinâmica Molecular '{plot_name}.png' não encontrado."
+            )
 
     return data, warnings
 
 
-def generate_html_report(work_dir: Path, output_file: Optional[Path] = None) -> Tuple[Path, List[str]]:
+def generate_html_report(
+    work_dir: Path, output_file: Optional[Path] = None
+) -> Tuple[Path, List[str]]:
     """
     Gera um relatório executivo e científico em HTML autoconferível consolidando
     todos os resultados de Docking, PLIP, ADMET e Dinâmica Molecular.
@@ -219,27 +234,65 @@ def generate_html_report(work_dir: Path, output_file: Optional[Path] = None) -> 
             admet_summary_text = "A molécula apresentou violações de regras físico-químicas, baixa absorção ou alertas de toxicidade."
     else:
         admet_badge = '<span class="badge badge-secondary">NÃO ANALISADO</span>'
-        admet_summary_text = "Dados de triagem ADMET não disponíveis no diretório de trabalho."
+        admet_summary_text = (
+            "Dados de triagem ADMET não disponíveis no diretório de trabalho."
+        )
 
     # Geração das Linhas da Tabela ADMET
     admet_rows_html = ""
     if admet:
         mw = admet.get("molecular_weight", 0.0)
-        mw_status = '<span class="badge badge-success">OK</span>' if mw <= 500 else '<span class="badge badge-danger">VIOLADO</span>'
+        mw_status = (
+            '<span class="badge badge-success">OK</span>'
+            if mw <= 500
+            else '<span class="badge badge-danger">VIOLADO</span>'
+        )
         logp = admet.get("logp", 0.0)
-        logp_status = '<span class="badge badge-success">OK</span>' if logp <= 5 else '<span class="badge badge-danger">VIOLADO</span>'
+        logp_status = (
+            '<span class="badge badge-success">OK</span>'
+            if logp <= 5
+            else '<span class="badge badge-danger">VIOLADO</span>'
+        )
         hbd = admet.get("hydrogen_bond_donors", 0)
-        hbd_status = '<span class="badge badge-success">OK</span>' if hbd <= 5 else '<span class="badge badge-danger">VIOLADO</span>'
+        hbd_status = (
+            '<span class="badge badge-success">OK</span>'
+            if hbd <= 5
+            else '<span class="badge badge-danger">VIOLADO</span>'
+        )
         hba = admet.get("hydrogen_bond_acceptors", 0)
-        hba_status = '<span class="badge badge-success">OK</span>' if hba <= 10 else '<span class="badge badge-danger">VIOLADO</span>'
+        hba_status = (
+            '<span class="badge badge-success">OK</span>'
+            if hba <= 10
+            else '<span class="badge badge-danger">VIOLADO</span>'
+        )
         tpsa = admet.get("tpsa", 0.0)
-        tpsa_status = '<span class="badge badge-success">OK</span>' if tpsa <= 140 else '<span class="badge badge-danger">VIOLADO</span>'
+        tpsa_status = (
+            '<span class="badge badge-success">OK</span>'
+            if tpsa <= 140
+            else '<span class="badge badge-danger">VIOLADO</span>'
+        )
         rotb = admet.get("rotatable_bonds", 0)
-        rotb_status = '<span class="badge badge-success">OK</span>' if rotb <= 10 else '<span class="badge badge-danger">VIOLADO</span>'
+        rotb_status = (
+            '<span class="badge badge-success">OK</span>'
+            if rotb <= 10
+            else '<span class="badge badge-danger">VIOLADO</span>'
+        )
 
-        hia_badge = '<span class="badge badge-success">Alta Absorção</span>' if hia_status == "Alta Absorção" else '<span class="badge badge-danger">Baixa Absorção</span>'
-        bbb_badge = '<span class="badge badge-success">Permeável</span>' if bbb_status == "Permeável" else '<span class="badge badge-warning">Baixa / Incompatível</span>'
-        pgp_badge = '<span class="badge badge-warning">Efluxo Ativo</span>' if "Substrato" in pgp_status else '<span class="badge badge-success">Baixo Efluxo</span>'
+        hia_badge = (
+            '<span class="badge badge-success">Alta Absorção</span>'
+            if hia_status == "Alta Absorção"
+            else '<span class="badge badge-danger">Baixa Absorção</span>'
+        )
+        bbb_badge = (
+            '<span class="badge badge-success">Permeável</span>'
+            if bbb_status == "Permeável"
+            else '<span class="badge badge-warning">Baixa / Incompatível</span>'
+        )
+        pgp_badge = (
+            '<span class="badge badge-warning">Efluxo Ativo</span>'
+            if "Substrato" in pgp_status
+            else '<span class="badge badge-success">Baixo Efluxo</span>'
+        )
 
         if toxic_alerts:
             tox_badge = '<span class="badge badge-danger">ALERTA PAINS</span>'
@@ -272,7 +325,9 @@ def generate_html_report(work_dir: Path, output_file: Optional[Path] = None) -> 
     interaction_rows_html = ""
     if hbonds or hcontacts:
         for hb in hbonds:
-            res_label = f"<strong>{hb.get('resname', 'UNK')}</strong> {hb.get('resnr', '')}"
+            res_label = (
+                f"<strong>{hb.get('resname', 'UNK')}</strong> {hb.get('resnr', '')}"
+            )
             dist = hb.get("distance", 0.0)
             interaction_rows_html += f"""
             <tr>
@@ -283,7 +338,9 @@ def generate_html_report(work_dir: Path, output_file: Optional[Path] = None) -> 
             </tr>
             """
         for hc in hcontacts:
-            res_label = f"<strong>{hc.get('resname', 'UNK')}</strong> {hc.get('resnr', '')}"
+            res_label = (
+                f"<strong>{hc.get('resname', 'UNK')}</strong> {hc.get('resnr', '')}"
+            )
             dist = hc.get("distance", 0.0)
             interaction_rows_html += f"""
             <tr>
@@ -301,7 +358,9 @@ def generate_html_report(work_dir: Path, output_file: Optional[Path] = None) -> 
     rmsf_img = data["plots"]["rmsf"]
     hbond_img = data["plots"]["hbond"]
 
-    def render_plot_card(title: str, subtitle: str, img_b64: Optional[str], fallback_desc: str) -> str:
+    def render_plot_card(
+        title: str, subtitle: str, img_b64: Optional[str], fallback_desc: str
+    ) -> str:
         if img_b64:
             return f"""
             <div class="gallery-card">
@@ -333,19 +392,19 @@ def generate_html_report(work_dir: Path, output_file: Optional[Path] = None) -> 
         "RMSD - Desvio Quadrático Médio",
         "Estabilidade Estrutural do Backbone da Proteína ao Longo do Tempo (ns)",
         rmsd_img,
-        "Gráfico rmsd.png não encontrado no diretório de trabalho."
+        "Gráfico rmsd.png não encontrado no diretório de trabalho.",
     )
     rmsf_card = render_plot_card(
         "RMSF - Flutuação Atômica por Resíduo",
         "Flexibilidade Conformacional dos Carbonos Alfa (C-α)",
         rmsf_img,
-        "Gráfico rmsf.png não encontrado no diretório de trabalho."
+        "Gráfico rmsf.png não encontrado no diretório de trabalho.",
     )
     hbond_card = render_plot_card(
         "Pontes de Hidrogênio Intermoleculares",
         "Monitoramento Temporal de Contatos Específicos Receptor-Ligante",
         hbond_img,
-        "Gráfico hbond.png não encontrado no diretório de trabalho."
+        "Gráfico hbond.png não encontrado no diretório de trabalho.",
     )
 
     # Tabela MM-PBSA detalhada
@@ -378,27 +437,27 @@ def generate_html_report(work_dir: Path, output_file: Optional[Path] = None) -> 
                             <tr>
                                 <td><strong>Van der Waals (&Delta;E<sub>vdw</sub>)</strong></td>
                                 <td>Atrações dispersivas e empacotamento estérico</td>
-                                <td class="text-right text-mono">{vdw.get('mean', 0.0):.2f} &plusmn; {vdw.get('std', 0.0):.2f}</td>
+                                <td class="text-right text-mono">{vdw.get("mean", 0.0):.2f} &plusmn; {vdw.get("std", 0.0):.2f}</td>
                             </tr>
                             <tr>
                                 <td><strong>Eletrostática (&Delta;E<sub>elec</sub>)</strong></td>
                                 <td>Interações de Coulomb e pares iônicos</td>
-                                <td class="text-right text-mono">{eel.get('mean', 0.0):.2f} &plusmn; {eel.get('std', 0.0):.2f}</td>
+                                <td class="text-right text-mono">{eel.get("mean", 0.0):.2f} &plusmn; {eel.get("std", 0.0):.2f}</td>
                             </tr>
                             <tr>
                                 <td><strong>Solvatação Polar (&Delta;G<sub>polar</sub>)</strong></td>
                                 <td>Custo de dessolvatação eletrostática (Poisson-Boltzmann)</td>
-                                <td class="text-right text-mono">{polar.get('mean', 0.0):.2f} &plusmn; {polar.get('std', 0.0):.2f}</td>
+                                <td class="text-right text-mono">{polar.get("mean", 0.0):.2f} &plusmn; {polar.get("std", 0.0):.2f}</td>
                             </tr>
                             <tr>
                                 <td><strong>Solvatação Apolar (&Delta;G<sub>apolar</sub>)</strong></td>
                                 <td>Efeito hidrofóbico e área de superfície acessível ao solvente (SASA)</td>
-                                <td class="text-right text-mono">{apolar.get('mean', 0.0):.2f} &plusmn; {apolar.get('std', 0.0):.2f}</td>
+                                <td class="text-right text-mono">{apolar.get("mean", 0.0):.2f} &plusmn; {apolar.get("std", 0.0):.2f}</td>
                             </tr>
                             <tr class="highlight-row">
                                 <td><strong>&Delta;G Total de Ligação (&Delta;G<sub>bind</sub>)</strong></td>
                                 <td><strong>Afinidade Termodinâmica Global MM-PBSA</strong></td>
-                                <td class="text-right text-mono font-bold text-success">{dg.get('mean', 0.0):.2f} &plusmn; {dg.get('std', 0.0):.2f}</td>
+                                <td class="text-right text-mono font-bold text-success">{dg.get("mean", 0.0):.2f} &plusmn; {dg.get("std", 0.0):.2f}</td>
                             </tr>
                         </tbody>
                     </table>
@@ -865,8 +924,8 @@ def generate_html_report(work_dir: Path, output_file: Optional[Path] = None) -> 
                 <p>Análise Integrada de Docking Molecular, Interações Atômicas (PLIP), Triagem ADMET e Dinâmica Molecular (GROMACS).</p>
             </div>
             <div class="hero-meta">
-                <div><strong>Data:</strong> {data['generated_at']}</div>
-                <div><strong>Diretório:</strong> {data['work_dir']}</div>
+                <div><strong>Data:</strong> {data["generated_at"]}</div>
+                <div><strong>Diretório:</strong> {data["work_dir"]}</div>
                 <div><strong>Status Geral:</strong> {admet_badge}</div>
             </div>
         </header>
@@ -902,10 +961,10 @@ def generate_html_report(work_dir: Path, output_file: Optional[Path] = None) -> 
                 {admet_badge}
             </div>
             <div class="card-body">
-                <div class="veredito-banner {'veredito-success' if admet_pass else 'veredito-danger'}">
-                    <div class="veredito-icon">{'✅' if admet_pass else '⚠️'}</div>
+                <div class="veredito-banner {"veredito-success" if admet_pass else "veredito-danger"}">
+                    <div class="veredito-icon">{"✅" if admet_pass else "⚠️"}</div>
                     <div class="veredito-content">
-                        <h4>{'Composto Aprovado na Triagem ADMET' if admet_pass else 'Atenção: Alertas ou Violações ADMET Identificadas'}</h4>
+                        <h4>{"Composto Aprovado na Triagem ADMET" if admet_pass else "Atenção: Alertas ou Violações ADMET Identificadas"}</h4>
                         <p>{admet_summary_text}</p>
                     </div>
                 </div>

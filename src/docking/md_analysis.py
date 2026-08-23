@@ -730,7 +730,10 @@ def parse_mmpbsa_dat(dat_path: Path) -> Dict[str, Any]:
                 elif comp_name in ("EGB", "EPB"):
                     target_dict["polar_solvation"] = {"mean": mean_val, "std": std_val}
                 elif comp_name in ("ESURF", "ENPOLAR"):
-                    target_dict["nonpolar_solvation"] = {"mean": mean_val, "std": std_val}
+                    target_dict["nonpolar_solvation"] = {
+                        "mean": mean_val,
+                        "std": std_val,
+                    }
                 elif comp_name == "GGAS":
                     target_dict["gas_energy"] = {"mean": mean_val, "std": std_val}
                 elif comp_name == "GSOLV":
