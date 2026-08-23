@@ -453,6 +453,8 @@ def analyze_trajectory(working_dir: Path):
         "md_fit.xtc",
         "-num",
         "hbond.xvg",
+        "-tu",
+        "ns",
     ]
     index_file = working_dir / "index.ndx"
     if index_file.exists():
@@ -471,13 +473,16 @@ def analyze_trajectory(working_dir: Path):
     )
 
 
-def parse_xvg(file_path: Path) -> Tuple[List[float], List[float]]:
+def parse_xvg_with_meta(
+    file_path: Path,
+) -> Tuple[List[float], List[float], Dict[str, str]]:
     """
-    Faz o parse de arquivos .xvg gerados pelo GROMACS, ignorando metadados iniciados com '@' e '#'.
-    Retorna uma tupla contendo duas listas de floats (valores do eixo X e eixo Y).
+    Faz o parse de arquivos .xvg gerados pelo GROMACS, extraindo dados e metadados (@ xaxis label, etc.).
+    Retorna (x_vals, y_vals, metadata_dict).
     """
     x_vals: List[float] = []
     y_vals: List[float] = []
+    meta: Dict[str, str] = {}
 
     if not file_path.exists():
         raise FileNotFoundError(f"Arquivo XVG não encontrado: {file_path}")
@@ -485,8 +490,26 @@ def parse_xvg(file_path: Path) -> Tuple[List[float], List[float]]:
     with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
         for line in f:
             line = line.strip()
-            if not line or line.startswith("@") or line.startswith("#"):
+            if not line:
                 continue
+            if line.startswith("@"):
+                line_clean = line[1:].strip()
+                if "xaxis" in line_clean and "label" in line_clean:
+                    parts = line_clean.split("label", 1)
+                    if len(parts) > 1:
+                        meta["xaxis_label"] = parts[1].strip().strip('"')
+                elif "yaxis" in line_clean and "label" in line_clean:
+                    parts = line_clean.split("label", 1)
+                    if len(parts) > 1:
+                        meta["yaxis_label"] = parts[1].strip().strip('"')
+                elif "title" in line_clean:
+                    parts = line_clean.split("title", 1)
+                    if len(parts) > 1:
+                        meta["title"] = parts[1].strip().strip('"')
+                continue
+            if line.startswith("#"):
+                continue
+
             parts = line.split()
             if len(parts) >= 2:
                 try:
@@ -495,6 +518,15 @@ def parse_xvg(file_path: Path) -> Tuple[List[float], List[float]]:
                 except ValueError:
                     continue
 
+    return x_vals, y_vals, meta
+
+
+def parse_xvg(file_path: Path) -> Tuple[List[float], List[float]]:
+    """
+    Faz o parse de arquivos .xvg gerados pelo GROMACS, ignorando metadados iniciados com '@' e '#'.
+    Retorna uma tupla contendo duas listas de floats (valores do eixo X e eixo Y).
+    """
+    x_vals, y_vals, _ = parse_xvg_with_meta(file_path)
     return x_vals, y_vals
 
 
@@ -515,7 +547,8 @@ def plot_md_results(working_dir: Path) -> Dict[str, Path]:
         raise FileNotFoundError(f"Diretório de trabalho não encontrado: {working_dir}")
 
     # Configuração de estilo científico de alta qualidade
-    sns.set_theme(style="whitegrid")  # type: ignore
+    if sns is not None:
+        sns.set_theme(style="whitegrid")  # type: ignore
     plt.rcParams.update(
         {
             "font.family": "sans-serif",
@@ -535,8 +568,18 @@ def plot_md_results(working_dir: Path) -> Dict[str, Path]:
     # 1. Gráfico de RMSD
     rmsd_file = working_dir / "rmsd.xvg"
     if rmsd_file.exists():
-        x_time, y_rmsd = parse_xvg(rmsd_file)
+        x_time, y_rmsd, meta_rmsd = parse_xvg_with_meta(rmsd_file)
         if x_time and y_rmsd:
+            # Ordena por tempo caso necessário
+            sorted_rmsd = sorted(zip(x_time, y_rmsd), key=lambda p: p[0])
+            x_time = [p[0] for p in sorted_rmsd]
+            y_rmsd = [p[1] for p in sorted_rmsd]
+
+            # Conversão automática de unidades (ps para ns) se necessário
+            xaxis_lbl = meta_rmsd.get("xaxis_label", "").lower()
+            if "ps" in xaxis_lbl or "(ps)" in xaxis_lbl or (max(x_time) > 1000 and "ns" not in xaxis_lbl):
+                x_time = [t / 1000.0 for t in x_time]
+
             fig, ax = plt.subplots(figsize=(7.5, 4.5), dpi=300)
             ax.plot(
                 x_time, y_rmsd, color="#1f77b4", linewidth=1.5, label="Backbone RMSD"
@@ -571,19 +614,70 @@ def plot_md_results(working_dir: Path) -> Dict[str, Path]:
     # 2. Gráfico de RMSF
     rmsf_file = working_dir / "rmsf.xvg"
     if rmsf_file.exists():
-        x_res, y_rmsf = parse_xvg(rmsf_file)
+        x_res, y_rmsf, _ = parse_xvg_with_meta(rmsf_file)
         if x_res and y_rmsf:
             fig, ax = plt.subplots(figsize=(8.5, 4.5), dpi=300)
-            ax.plot(x_res, y_rmsf, color="#2a9d8f", linewidth=1.4, label="C-α RMSF")
-            ax.fill_between(x_res, y_rmsf, color="#2a9d8f", alpha=0.25)  # type: ignore
 
-            ax.set_xlabel("Residue Number", fontweight="bold")
+            # Tratamento para ordenação e suporte a múltiplos segmentos/cadeias:
+            # Caso os índices de resíduo sejam estritamente únicos (cadeia única):
+            if len(set(x_res)) == len(x_res):
+                sorted_data = sorted(zip(x_res, y_rmsf), key=lambda p: p[0])
+                x_plot = [p[0] for p in sorted_data]
+                y_plot = [p[1] for p in sorted_data]
+                chain_boundaries = []
+                x_label = "Residue Number"
+            else:
+                # Sistema multimérico / multichain onde a numeração reseta (ex: Cadeia A 1..229, Cadeia B 1..229)
+                # Agrupa por segmentos contínuos, ordena internamente e aplica numeração cumulativa contínua
+                # para evitar as linhas diagonais de retorno (resíduo 229 -> 1) e zig-zags entre cadeias.
+                segments: List[List[Tuple[float, float]]] = []
+                current_segment: List[Tuple[float, float]] = []
+
+                for res, val in zip(x_res, y_rmsf):
+                    if current_segment and res <= current_segment[-1][0]:
+                        segments.append(current_segment)
+                        current_segment = []
+                    current_segment.append((res, val))
+                if current_segment:
+                    segments.append(current_segment)
+
+                x_plot = []
+                y_plot = []
+                chain_boundaries = []
+                accum_offset = 0
+
+                for seg_idx, seg in enumerate(segments):
+                    sorted_seg = sorted(seg, key=lambda p: p[0])
+                    max_res_in_seg = int(sorted_seg[-1][0])
+                    for res, val in sorted_seg:
+                        x_plot.append(res + accum_offset)
+                        y_plot.append(val)
+                    accum_offset += max_res_in_seg
+                    if seg_idx < len(segments) - 1:
+                        chain_boundaries.append(accum_offset)
+
+                x_label = "Residue Index (Continuous)"
+
+            ax.plot(x_plot, y_plot, color="#2a9d8f", linewidth=1.4, label="C-α RMSF")
+            ax.fill_between(x_plot, y_plot, color="#2a9d8f", alpha=0.25)  # type: ignore
+
+            # Delimitação visual sutil para interfaces entre cadeias em complexos multiméricos
+            for cb in chain_boundaries:
+                ax.axvline(
+                    x=cb + 0.5,
+                    color="#6c757d",
+                    linestyle=":",
+                    linewidth=1.0,
+                    alpha=0.6,
+                )
+
+            ax.set_xlabel(x_label, fontweight="bold")
             ax.set_ylabel("RMSF (nm)", fontweight="bold")
             ax.set_title(
                 "Root Mean Square Fluctuation per Residue", fontweight="bold", pad=12
             )
             ax.set_xlim(
-                left=min(x_res) if x_res else 0, right=max(x_res) if x_res else 1
+                left=min(x_plot) if x_plot else 0, right=max(x_plot) if x_plot else 1
             )
             ax.set_ylim(bottom=0)
             ax.legend(loc="upper right", frameon=True, framealpha=0.9)
@@ -596,8 +690,18 @@ def plot_md_results(working_dir: Path) -> Dict[str, Path]:
     # 3. Gráfico de Pontes de Hidrogênio (HBond)
     hbond_file = working_dir / "hbond.xvg"
     if hbond_file.exists():
-        x_time, y_hb = parse_xvg(hbond_file)
+        x_time, y_hb, meta_hb = parse_xvg_with_meta(hbond_file)
         if x_time and y_hb:
+            # Garante ordenação temporal antes de traçar
+            sorted_hb = sorted(zip(x_time, y_hb), key=lambda p: p[0])
+            x_time = [p[0] for p in sorted_hb]
+            y_hb = [p[1] for p in sorted_hb]
+
+            # Conversão automática de unidades (ps para ns) se necessário
+            xaxis_lbl = meta_hb.get("xaxis_label", "").lower()
+            if "ps" in xaxis_lbl or "(ps)" in xaxis_lbl or (max(x_time) > 1000 and "ns" not in xaxis_lbl):
+                x_time = [t / 1000.0 for t in x_time]
+
             fig, ax = plt.subplots(figsize=(7.5, 4.5), dpi=300)
             ax.plot(
                 x_time,
