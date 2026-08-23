@@ -549,13 +549,13 @@ def plot_md_results(working_dir: Path) -> Dict[str, Path]:
                 color="#d62728",
                 linestyle="--",
                 alpha=0.7,
-                label=f"Média: {mean_rmsd:.3f} nm",
+                label=f"Mean: {mean_rmsd:.3f} nm",
             )
 
-            ax.set_xlabel("Tempo (ns)", fontweight="bold")
+            ax.set_xlabel("Time (ns)", fontweight="bold")
             ax.set_ylabel("RMSD (nm)", fontweight="bold")
             ax.set_title(
-                "Evolução Temporal do RMSD do Esqueleto Protéico",
+                "Time Evolution of Protein Backbone RMSD",
                 fontweight="bold",
                 pad=12,
             )
@@ -574,13 +574,13 @@ def plot_md_results(working_dir: Path) -> Dict[str, Path]:
         x_res, y_rmsf = parse_xvg(rmsf_file)
         if x_res and y_rmsf:
             fig, ax = plt.subplots(figsize=(8.5, 4.5), dpi=300)
-            ax.plot(x_res, y_rmsf, color="#2a9d8f", linewidth=1.4, label="RMSF C-α")
+            ax.plot(x_res, y_rmsf, color="#2a9d8f", linewidth=1.4, label="C-α RMSF")
             ax.fill_between(x_res, y_rmsf, color="#2a9d8f", alpha=0.25)  # type: ignore
 
-            ax.set_xlabel("Número do Resíduo", fontweight="bold")
-            ax.set_ylabel("Flutuação RMSF (nm)", fontweight="bold")
+            ax.set_xlabel("Residue Number", fontweight="bold")
+            ax.set_ylabel("RMSF (nm)", fontweight="bold")
             ax.set_title(
-                "Flutuação Atômica por Resíduo (RMSF)", fontweight="bold", pad=12
+                "Root Mean Square Fluctuation per Residue", fontweight="bold", pad=12
             )
             ax.set_xlim(
                 left=min(x_res) if x_res else 0, right=max(x_res) if x_res else 1
@@ -622,14 +622,12 @@ def plot_md_results(working_dir: Path) -> Dict[str, Path]:
                     smoothed,
                     color="#9d0208",
                     linewidth=1.8,
-                    label=f"Média Suavizada (janela {window_size})",
+                    label=f"Running Average (window {window_size})",
                 )
 
-            ax.set_xlabel("Tempo (ns)", fontweight="bold")
-            ax.set_ylabel("Número de H-Bonds", fontweight="bold")
-            ax.set_title(
-                "Pontes de Hidrogênio (Proteína - Ligante)", fontweight="bold", pad=12
-            )
+            ax.set_xlabel("Time (ns)", fontweight="bold")
+            ax.set_ylabel("H-Bonds count", fontweight="bold")
+            ax.set_title("Protein–Ligand Hydrogen Bonds", fontweight="bold", pad=12)
             ax.set_xlim(left=0, right=max(x_time) if x_time else 1)
             ax.set_ylim(bottom=0)
             ax.legend(loc="upper right", frameon=True, framealpha=0.9)
