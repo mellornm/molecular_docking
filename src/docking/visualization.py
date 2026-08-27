@@ -96,7 +96,7 @@ def generate_pymol_script(work_dir: Path) -> Path:
         "# 3. Representação da Proteína (Cartoon)",
         "hide everything, all",
         "show cartoon, polymer",
-        "color gel_cyan, polymer",
+        "color cyan, polymer",
         "set cartoon_transparency, 0.15, polymer",
         "",
         "# 4. Representação do Ligante (Sticks)",

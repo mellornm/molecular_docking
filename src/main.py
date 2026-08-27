@@ -608,13 +608,25 @@ def interactive():
             )
 
         elif choice == "5. Preparar Dinâmica Molecular (GROMACS)":
-            rec_default = "data/1OSV/processed/receptor.pdb"
-            if not Path(rec_default).exists():
-                rec_default = ""
+            rec_default = ""
+            for candidate in [Path("data/7CFN/processed/receptor.pdb"), Path("data/1OSV/processed/receptor.pdb")]:
+                if candidate.exists():
+                    rec_default = str(candidate)
+                    break
+            if not rec_default:
+                found_rec = list(Path("data").glob("*/processed/receptor.pdb"))
+                if found_rec:
+                    rec_default = str(found_rec[0])
 
-            sdf_default = "data/screening/desoxicolato/docked_poses.sdf"
-            if not Path(sdf_default).exists():
-                sdf_default = ""
+            sdf_default = ""
+            for candidate_sdf in [Path("data/7CFN/results/docked_poses.sdf"), Path("data/screening/desoxicolato/docked_poses.sdf")]:
+                if candidate_sdf.exists():
+                    sdf_default = str(candidate_sdf)
+                    break
+            if not sdf_default:
+                found_sdf = list(Path("data").glob("**/docked_poses.sdf"))
+                if found_sdf:
+                    sdf_default = str(found_sdf[0])
 
             out_default = "data/md_files"
 
@@ -1169,11 +1181,22 @@ def interactive():
                 )
                 continue
 
+            receptor_code = questionary.text(
+                "Código/Nome do Receptor (ex: 7CFN, GPBAR1):",
+                default="7CFN",
+            ).ask()
+
+            ligand_name = questionary.text(
+                "Nome do Ligante (ex: Desoxicolato, INT-777):",
+                default="Desoxicolato",
+            ).ask()
+
             try:
                 console.print(
                     Panel.fit(
                         f"[bold blue]Geração de Relatório Executivo e Visualização 3D[/bold blue]\n"
-                        f"Diretório de Trabalho: {work_dir}",
+                        f"Diretório de Trabalho: {work_dir}\n"
+                        f"Receptor: {receptor_code or 'Não informado'} | Ligante: {ligand_name or 'Não informado'}",
                         border_style="blue",
                     )
                 )
@@ -1187,7 +1210,11 @@ def interactive():
                         description="[1/2] Compilando e gerando Relatório Executivo HTML...",
                         total=1,
                     )
-                    html_path, missing = report.generate_html_report(Path(work_dir))
+                    html_path, missing = report.generate_html_report(
+                        Path(work_dir),
+                        receptor_name=receptor_code,
+                        ligand_name=ligand_name,
+                    )
                     progress.update(task_html, completed=1)
 
                     task_pymol = progress.add_task(
@@ -1584,6 +1611,16 @@ def report_command(
         "--out",
         help="Caminho personalizado para o relatório HTML (padrão: report.html dentro do diretório)",
     ),
+    receptor: str = typer.Option(
+        None,
+        "--receptor",
+        help="Código ou nome do receptor (ex: 7CFN, GPBAR1)",
+    ),
+    ligand: str = typer.Option(
+        None,
+        "--ligand",
+        help="Nome ou identificador do ligante (ex: INT-777, Desoxicolato)",
+    ),
 ):
     """
     RELATÓRIO EXECUTIVO (HTML) E VISUALIZAÇÃO 3D (PyMOL):
@@ -1594,7 +1631,8 @@ def report_command(
     console.print(
         Panel.fit(
             f"[bold blue]Geração de Relatório Executivo e Visualização 3D[/bold blue]\n"
-            f"Diretório de Trabalho: {work_dir}",
+            f"Diretório de Trabalho: {work_dir}\n"
+            f"Receptor: {receptor or 'Não informado'} | Ligante: {ligand or 'Não informado'}",
             border_style="blue",
         )
     )
@@ -1615,7 +1653,9 @@ def report_command(
                 description="[1/2] Compilando e gerando Relatório Executivo HTML...",
                 total=1,
             )
-            html_path, missing = report.generate_html_report(work_dir, output_html)
+            html_path, missing = report.generate_html_report(
+                work_dir, output_html, receptor_name=receptor, ligand_name=ligand
+            )
             progress.update(task_html, completed=1)
 
             task_pymol = progress.add_task(

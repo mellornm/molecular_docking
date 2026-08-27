@@ -125,7 +125,7 @@ def run_acpype(ligand_pdb: Path, output_dir: Path):
     acpype_dir = str(Path(acpype_bin).parent)
     env["PATH"] = f"{acpype_dir}{os.pathsep}{env.get('PATH', '')}"
 
-    cmd_acpype = [acpype_bin, "-i", ligand_pdb_name, "-c", "bcc"]
+    cmd_acpype = [acpype_bin, "-i", ligand_pdb_name, "-c", "bcc", "-f"]
     try:
         subprocess.run(
             cmd_acpype,
@@ -157,6 +157,7 @@ def run_pdb2gmx(receptor_pdb: Path, output_dir: Path):
     if receptor_pdb.name != "receptor_fixed.pdb":
         try:
             fixer = PDBFixer(filename=str(receptor_pdb))
+            fixer.removeHeterogens(keepWater=False)
             fixer.findMissingResidues()
             fixer.findMissingAtoms()
             fixer.addMissingAtoms()
@@ -384,6 +385,23 @@ def prepare_md_system(receptor_pdb: Path, ligand_sdf: Path, output_dir: Path):
     yield "A", "start"
     try:
         fixer = PDBFixer(filename=str(receptor_pdb))
+        fixer.removeHeterogens(keepWater=False)
+
+        # Validação: verifica se há resíduos proteicos válidos
+        standard_amino_acids = {
+            "ALA", "ARG", "ASN", "ASP", "CYS", "GLN", "GLU", "GLY", "HIS", "ILE",
+            "LEU", "LYS", "MET", "PHE", "PRO", "SER", "THR", "TRP", "TYR", "VAL",
+            "HID", "HIE", "HIP", "CYX", "ASH", "GLH", "LYN", "ARN"
+        }
+        protein_res = [
+            r for r in fixer.topology.residues() if r.name.upper() in standard_amino_acids
+        ]
+        if not protein_res:
+            raise SimulationPrepError(
+                f"O arquivo fornecido como receptor ('{receptor_pdb}') não contém resíduos de proteína (aminoácidos padrão). "
+                f"Certifique-se de selecionar o arquivo 'receptor.pdb' (ex: data/7CFN/processed/receptor.pdb) e NÃO o arquivo do ligante ('ligand.pdb')."
+            )
+
         fixer.findMissingResidues()
         fixer.findMissingAtoms()
         fixer.addMissingAtoms()
@@ -392,6 +410,8 @@ def prepare_md_system(receptor_pdb: Path, ligand_sdf: Path, output_dir: Path):
         with open(receptor_fixed, "w", encoding="utf-8") as f:
             PDBFile.writeFile(fixer.topology, fixer.positions, f)
     except Exception as e:
+        if isinstance(e, SimulationPrepError):
+            raise e
         raise SimulationPrepError(f"Erro na Etapa A (Cura com PDBFixer): {e}")
     yield "A", "success"
 
@@ -404,6 +424,9 @@ def prepare_md_system(receptor_pdb: Path, ligand_sdf: Path, output_dir: Path):
                 f"Não foi possível ler o arquivo SDF ou ele está vazio: {ligand_sdf}"
             )
         mol = supplier[0]
+        # Remove hidrogênios residuais cujas coordenadas possam ter sido corrompidas/deslocadas pelo docking
+        mol = Chem.RemoveHs(mol)
+        # Recalcula e adiciona todos os hidrogênios com posições geométricas 3D precisas
         mol = Chem.AddHs(mol, addCoords=True)
 
         element_counts = collections.defaultdict(int)
@@ -434,7 +457,7 @@ def prepare_md_system(receptor_pdb: Path, ligand_sdf: Path, output_dir: Path):
     yield "C", "start"
     if not acpype_bin:
         raise DependencyError("O executável 'acpype' não foi encontrado no PATH.")
-    cmd_acpype = [acpype_bin, "-i", "ligand_md.pdb", "-c", "bcc"]
+    cmd_acpype = [acpype_bin, "-i", "ligand_md.pdb", "-c", "bcc", "-f"]
     run_command(cmd_acpype, output_dir, step_name="Etapa C (Parametrização)")
     yield "C", "success"
 
@@ -613,7 +636,7 @@ def prepare_md_system(receptor_pdb: Path, ligand_sdf: Path, output_dir: Path):
             "-o",
             "ions.tpr",
             "-maxwarn",
-            "1",
+            "3",
         ]
         run_command(
             cmd_grompp_ions, output_dir, step_name="Etapa I (Compilação de Íons)"
@@ -674,6 +697,8 @@ def prepare_md_system(receptor_pdb: Path, ligand_sdf: Path, output_dir: Path):
             "topol.top",
             "-o",
             "em.tpr",
+            "-maxwarn",
+            "2",
         ]
         run_command(cmd_grompp_em, output_dir, step_name="Etapa K (Grompp Definitivo)")
     except Exception as e:

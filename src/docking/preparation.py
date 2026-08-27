@@ -122,11 +122,21 @@ def prepare_ligand(pdb_path: Path, out_path: Path):
     frags = Chem.GetMolFrags(mol, asMols=True)
     # Isola o maior fragmento (assume ser o ligante de interesse)
     ligand = max(frags, key=lambda m: m.GetNumAtoms())
-    ligand = Chem.AddHs(ligand)
+    ligand = Chem.AddHs(ligand, addCoords=True)
 
-    prep = MoleculePreparation()
+    # 1. Tentativa com charge_model padrão (Gasteiger)
+    prep = MoleculePreparation(charge_model="gasteiger")
     setups = prep.prepare(ligand)
-    pdbqt_string, _, _ = PDBQTWriterLegacy.write_string(setups[0])
+    pdbqt_string, is_ok, error_msg = PDBQTWriterLegacy.write_string(setups[0])
+
+    # 2. Fallback caso Gasteiger gere NaN/Inf (comum para fosfatos/grupos inorgânicos sem ordens de ligação explícitas no PDB)
+    if not is_ok:
+        prep_fallback = MoleculePreparation(charge_model="zero")
+        setups_fallback = prep_fallback.prepare(ligand)
+        pdbqt_string, is_ok, error_msg = PDBQTWriterLegacy.write_string(setups_fallback[0])
+
+    if not is_ok or not pdbqt_string.strip():
+        raise RuntimeError(f"Falha ao gerar PDBQT do ligante: {error_msg}")
 
     with open(out_path, "w") as f:
         f.write(pdbqt_string)

@@ -177,7 +177,10 @@ def parse_pipeline_artifacts(work_dir: Path) -> Tuple[Dict[str, Any], List[str]]
 
 
 def generate_html_report(
-    work_dir: Path, output_file: Optional[Path] = None
+    work_dir: Path,
+    output_file: Optional[Path] = None,
+    receptor_name: Optional[str] = None,
+    ligand_name: Optional[str] = None,
 ) -> Tuple[Path, List[str]]:
     """
     Gera um relatório executivo e científico em HTML autoconferível consolidando
@@ -185,6 +188,8 @@ def generate_html_report(
 
     :param work_dir: Diretório onde se encontram os artefatos do pipeline.
     :param output_file: Caminho de saída para o arquivo HTML (padrão: work_dir/report.html).
+    :param receptor_name: Código ou nome do receptor (ex: 7CFN, GPBAR1).
+    :param ligand_name: Nome do ligante (ex: INT-777, Desoxicolato).
     :return: Tupla com o caminho do arquivo HTML gerado e a lista de avisos de arquivos ausentes.
     """
     work_dir = Path(work_dir)
@@ -196,6 +201,26 @@ def generate_html_report(
     output_file.parent.mkdir(parents=True, exist_ok=True)
 
     data, warnings = parse_pipeline_artifacts(work_dir)
+
+    # Inferência inteligente de metadados caso não informados
+    if not receptor_name:
+        for part in work_dir.resolve().parts:
+            if len(part) == 4 and part.isalnum() and (part.isupper() or any(c.isdigit() for c in part)):
+                receptor_name = part
+                break
+    if not ligand_name:
+        sdf_files = list(work_dir.glob("*.sdf")) + list(work_dir.glob("*/*.sdf"))
+        if sdf_files:
+            ligand_name = sdf_files[0].stem
+        elif "desoxicolato" in str(work_dir).lower():
+            ligand_name = "Desoxicolato"
+
+    receptor_name_display = (
+        receptor_name.strip() if receptor_name and receptor_name.strip() else "Não especificado"
+    )
+    ligand_name_display = (
+        ligand_name.strip() if ligand_name and ligand_name.strip() else "Não especificado"
+    )
 
     # Extração de Métricas Principais
     vina_score = data["vina_score"]
@@ -543,6 +568,39 @@ def generate_html_report(
             display: flex;
             align-items: center;
             gap: 0.75rem;
+        }}
+
+        .hero-targets {{
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.6rem;
+            margin: 0.4rem 0 0.85rem 0;
+        }}
+
+        .target-chip {{
+            display: inline-flex;
+            align-items: center;
+            gap: 0.45rem;
+            background: rgba(255, 255, 255, 0.16);
+            backdrop-filter: blur(8px);
+            border: 1px solid rgba(255, 255, 255, 0.28);
+            padding: 0.3rem 0.85rem;
+            border-radius: 9999px;
+            font-size: 0.9rem;
+            color: #ffffff;
+        }}
+
+        .target-chip .chip-label {{
+            color: #c7d2fe;
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            font-weight: 600;
+        }}
+
+        .target-chip strong {{
+            color: #ffffff;
+            font-weight: 700;
         }}
 
         .hero-title p {{
@@ -921,9 +979,15 @@ def generate_html_report(
         <header class="hero">
             <div class="hero-title">
                 <h1>🧬 Relatório Consolidado de Bioinformática</h1>
+                <div class="hero-targets">
+                    <span class="target-chip"><span class="chip-label">Receptor:</span> <strong>{receptor_name_display}</strong></span>
+                    <span class="target-chip"><span class="chip-label">Ligante:</span> <strong>{ligand_name_display}</strong></span>
+                </div>
                 <p>Análise Integrada de Docking Molecular, Interações Atômicas (PLIP), Triagem ADMET e Dinâmica Molecular (GROMACS).</p>
             </div>
             <div class="hero-meta">
+                <div><strong>Receptor:</strong> {receptor_name_display}</div>
+                <div><strong>Ligante:</strong> {ligand_name_display}</div>
                 <div><strong>Data:</strong> {data["generated_at"]}</div>
                 <div><strong>Diretório:</strong> {data["work_dir"]}</div>
                 <div><strong>Status Geral:</strong> {admet_badge}</div>

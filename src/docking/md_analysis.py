@@ -857,12 +857,47 @@ def parse_mmpbsa_dat(dat_path: Path) -> Dict[str, Any]:
     return summary
 
 
+def _ensure_gmx_mmpbsa_cys_patched() -> None:
+    """
+    Verifica e aplica auto-patch no arquivo make_top.py do pacote gmx_MMPBSA caso detecte
+    o bug de indexação de pontes dissulfeto em sistemas proteicos multicadeia.
+    """
+    try:
+        import GMXMMPBSA.make_top as mt
+
+        make_top_path = Path(mt.__file__)
+        if make_top_path.exists():
+            with open(make_top_path, "r", encoding="utf-8") as f:
+                code = f.read()
+
+            target = (
+                "if str_name == 'COM':\n"
+                "                                        cys1 = c\n"
+                "                                        cys2 = structure.residues.index(bondedatm.residue) + 1\n"
+                "                                    else:\n"
+                "                                        cys1 = residue.number\n"
+                "                                        cys2 = bondedatm.residue.number"
+            )
+            replacement = (
+                "if str_name:\n"
+                "                                    cys1 = c\n"
+                "                                    cys2 = structure.residues.index(bondedatm.residue) + 1"
+            )
+
+            if target in code:
+                code = code.replace(target, replacement)
+                with open(make_top_path, "w", encoding="utf-8") as f:
+                    f.write(code)
+    except Exception:
+        pass
+
+
 def calculate_mmpbsa(working_dir: Path) -> Dict[str, Any]:
     """
     Executa o cálculo de Energia Livre de Ligação MM-PBSA via gmx_MMPBSA:
     1. Gera o arquivo de configuração mmpbsa.in com 100 frames distribuídos uniformemente ao longo de md_fit.xtc.
     2. Identifica os grupos do receptor (Protein) e ligante (ligand_md / LIG) em index.ndx.
-    3. Executa o gmx_MMPBSA via subprocesso.
+    3. Executa o gmx_MMPBSA via subprocesso com tratamento automático para sistemas multicadeia.
     4. Extrai contribuições energéticas (Van der Waals, Eletrostática, Solvatação Polar e Apolar) e Delta G.
     5. Salva os resultados estruturados no arquivo mmpbsa_summary.json.
 
@@ -889,6 +924,9 @@ def calculate_mmpbsa(working_dir: Path) -> Dict[str, Any]:
     mmpbsa_bin = find_executable("gmx_MMPBSA")
     if not mmpbsa_bin:
         raise DependencyError("O executável 'gmx_MMPBSA' não foi encontrado no PATH.")
+
+    # Garante que o patch de suporte a sistemas multicadeia esteja ativo
+    _ensure_gmx_mmpbsa_cys_patched()
 
     # 1. Identificação do número de frames e cálculo de intervalo para 100 frames uniformes
     gmx_bin = find_executable("gmx")
@@ -981,7 +1019,10 @@ radiopt=0,
     try:
         env = os.environ.copy()
         exec_dir = str(Path(mmpbsa_bin).parent)
-        env["PATH"] = f"{exec_dir}{os.pathsep}{env.get('PATH', '')}"
+        # Inclui diretórios padrão de binários do sistema para que programas auxiliares
+        # (gmx, cpptraj, tleap, parmchk2, sander) sejam encontrados confiavelmente
+        system_paths = ["/usr/bin", "/bin", "/usr/local/bin"]
+        env["PATH"] = f"{exec_dir}{os.pathsep}{os.pathsep.join(system_paths)}{os.pathsep}{env.get('PATH', '')}"
 
         result = subprocess.run(
             cmd_mmpbsa, cwd=str(working_dir), env=env, capture_output=True, text=True
