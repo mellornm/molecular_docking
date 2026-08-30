@@ -248,9 +248,20 @@ def run_production_md(working_dir: Path):
 
 def fix_pbc(working_dir: Path) -> Path:
     """
-    Executa o tratamento de Condições Periódicas de Contorno (PBC) via GROMACS (gmx trjconv):
-    - Passo 1: Remove saltos e quebras através da caixa de simulação (-pbc nojump -> md_nojump.xtc)
-    - Passo 2: Centraliza o complexo na proteína e compacta a caixa (-center -pbc mol -ur compact -> md_fit.xtc)
+    Executa o tratamento completo e automatizado de Condições Periódicas de Contorno (PBC)
+    e remoção de movimentos de corpo rígido (fit rot+trans) via GROMACS (gmx trjconv):
+
+    1. Etapa 1 - Centralização e Correção de PBC:
+       gmx trjconv -s md.tpr -f md.xtc -o md_center.xtc -pbc mol -center
+       (Input stdin: '1\\n0\\n' -> Protein para centralizar, System para salvar)
+
+    2. Etapa 2 - Ajuste de Rotação e Translação (Fit de Mínimos Quadrados):
+       gmx trjconv -s md.tpr -f md_center.xtc -o md_fit.xtc -fit rot+trans
+       (Input stdin: '4\\n0\\n' -> Backbone para fit de RMSD, System para salvar)
+
+    3. Etapa 3 - Estrutura Estática Limpa para PyMOL:
+       gmx trjconv -s md.tpr -f md.gro -o md_clean.gro -pbc mol -center
+       (Input stdin: '1\\n0\\n' -> Protein para centralizar, System para salvar)
 
     Retorna o caminho do arquivo de trajetória corrigida md_fit.xtc.
     """
@@ -306,9 +317,9 @@ def fix_pbc(working_dir: Path) -> Path:
                 f"Falha ao executar o tratamento de PBC ({step_name}): {e}"
             )
 
-    # Passo 1: Remover saltos periódicos (nojump)
-    # Seleção de grupo: 0 (System)
-    cmd_nojump = [
+    # Etapa 1: Centralização da Proteína e Correção de Moléculas Quebradas em PBC
+    # Seleção de grupos: 1 (Protein para centralizar) e 0 (System para salvar)
+    cmd_center = [
         gmx_bin,
         "trjconv",
         "-s",
@@ -316,36 +327,65 @@ def fix_pbc(working_dir: Path) -> Path:
         "-f",
         "md.xtc",
         "-o",
-        "md_nojump.xtc",
+        "md_center.xtc",
         "-pbc",
-        "nojump",
+        "mol",
+        "-center",
     ]
     run_trjconv_cmd(
-        cmd_nojump, input_val="0\n", step_name="Passo 1 (Remoção de Saltos - nojump)"
+        cmd_center,
+        input_val="1\n0\n",
+        step_name="Etapa 1 (Centralização e Correção de PBC - pbc mol -center)",
     )
 
-    # Passo 2: Centralizar na proteína e compactar a caixa
-    # Seleção de grupos: 1 (Protein para centralizar) e 0 (System para salvar na trajetória final)
+    # Etapa 2: Ajuste de Rotação e Translação (Fit de Mínimos Quadrados via Backbone)
+    # Seleção de grupos: 4 (Backbone para fit de RMSD) e 0 (System para salvar)
     cmd_fit = [
         gmx_bin,
         "trjconv",
         "-s",
         "md.tpr",
         "-f",
-        "md_nojump.xtc",
+        "md_center.xtc",
         "-o",
         "md_fit.xtc",
-        "-center",
-        "-pbc",
-        "mol",
-        "-ur",
-        "compact",
+        "-fit",
+        "rot+trans",
     ]
     run_trjconv_cmd(
         cmd_fit,
-        input_val="1\n0\n",
-        step_name="Passo 2 (Centralização e Compactação - mol compact)",
+        input_val="4\n0\n",
+        step_name="Etapa 2 (Ajuste de Rotação e Translação - fit rot+trans)",
     )
+
+    # Etapa 3: Estrutura Estática Limpa para Visualização no PyMOL
+    # Seleção de grupos: 1 (Protein para centralizar) e 0 (System para salvar)
+    gro_candidates = ["md.gro", "npt.gro", "em.gro", "complex.gro"]
+    gro_source = None
+    for cand in gro_candidates:
+        if (working_dir / cand).exists():
+            gro_source = cand
+            break
+
+    if gro_source:
+        cmd_clean_gro = [
+            gmx_bin,
+            "trjconv",
+            "-s",
+            "md.tpr",
+            "-f",
+            gro_source,
+            "-o",
+            "md_clean.gro",
+            "-pbc",
+            "mol",
+            "-center",
+        ]
+        run_trjconv_cmd(
+            cmd_clean_gro,
+            input_val="1\n0\n",
+            step_name="Etapa 3 (Estrutura Estática Limpa para PyMOL - md_clean.gro)",
+        )
 
     md_fit_path = working_dir / "md_fit.xtc"
     if not md_fit_path.exists():
@@ -358,8 +398,12 @@ def fix_pbc(working_dir: Path) -> Path:
 
 def analyze_trajectory(working_dir: Path):
     """
-    Executa a análise da trajetória da Dinâmica Molecular no GROMACS utilizando
-    estritamente a trajetória corrigida com PBC (md_fit.xtc).
+    Executa a análise quantitativa da trajetória de Dinâmica Molecular no GROMACS:
+    1. RMSD do Backbone da Proteína (gmx rms -s md.tpr -f md_fit.xtc -o rmsd.xvg -tu ns)
+    2. RMSF por resíduo dos Carbonos Alfa (gmx rmsf -s md.tpr -f md_fit.xtc -o rmsf.xvg -res)
+    3. Monitoramento de Pontes de Hidrogênio Proteína-Ligante (gmx hbond -s md.tpr -f md_fit.xtc -num hbond.xvg -tu ns)
+
+    Utiliza estritamente a trajetória ajustada e sem artefatos de PBC (md_fit.xtc).
     """
     working_dir = Path(working_dir)
     if not working_dir.exists():
@@ -384,7 +428,7 @@ def analyze_trajectory(working_dir: Path):
             "O executável 'gmx' (GROMACS) não foi encontrado no PATH."
         )
 
-    def run_analysis_cmd(cmd, cwd, input_val, step_name=""):
+    def run_analysis_cmd(cmd: List[str], cwd: Path, input_val: str, step_name: str = ""):
         try:
             env = os.environ.copy()
             exec_dir = str(Path(gmx_bin).parent)
@@ -427,9 +471,9 @@ def analyze_trajectory(working_dir: Path):
         "-tu",
         "ns",
     ]
-    run_analysis_cmd(cmd_rmsd, working_dir, "4 4\n", "RMSD do esqueleto da proteína")
+    run_analysis_cmd(cmd_rmsd, working_dir, "4\n4\n", "RMSD do esqueleto da proteína (Backbone)")
 
-    # 2. RMSF por resíduo (C-alpha -> 3)
+    # 2. RMSF por resíduo dos Carbonos Alfa (C-alpha -> 3)
     cmd_rmsf = [
         gmx_bin,
         "rmsf",
@@ -441,7 +485,7 @@ def analyze_trajectory(working_dir: Path):
         "rmsf.xvg",
         "-res",
     ]
-    run_analysis_cmd(cmd_rmsf, working_dir, "3\n", "RMSF por resíduo")
+    run_analysis_cmd(cmd_rmsf, working_dir, "3\n", "RMSF por resíduo (C-alpha)")
 
     # 3. Pontes de hidrogênio entre Proteína e Ligante
     cmd_hbond = [

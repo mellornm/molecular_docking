@@ -133,7 +133,7 @@ def archive_experiment(exp_name: str = None) -> Path:
 
     # 3. Trajetória e Simulação de Produção (GROMACS)
     print("\n" + "━" * 68)
-    print("3. Arquivando Simulação e Trajetória Corrigida (Opção A)...")
+    print("3. Arquivando Simulação e Trajetória Bruta Original (md.xtc)...")
     print("━" * 68)
     copy_file(md_dir / "md.tpr", dest_dirs["trajectory"], "TPR-Binary")
     copy_file(md_dir / "md.gro", dest_dirs["trajectory"], "Coords-Final")
@@ -141,8 +141,9 @@ def archive_experiment(exp_name: str = None) -> Path:
     copy_file(md_dir / "md.log", dest_dirs["trajectory"], "GMX-Log")
     copy_file(md_dir / "md.cpt", dest_dirs["trajectory"], "Checkpoint")
 
-    # Arquiva estritamente a trajetória tratada (md_fit.xtc), dispensando md.xtc e md_nojump.xtc
-    copy_file(md_dir / "md_fit.xtc", dest_dirs["trajectory"], "Traj-Fit")
+    # Arquiva a trajetória bruta original (md.xtc) e a estrutura estática limpa (md_clean.gro)
+    copy_file(md_dir / "md.xtc", dest_dirs["trajectory"], "Traj-Raw")
+    copy_file(md_dir / "md_clean.gro", dest_dirs["trajectory"], "Structure-Clean")
 
     # 4. Relatórios Executivos, Gráficos e Resultados MM-PBSA
     print("\n" + "━" * 68)

@@ -3,14 +3,18 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
 
-def _find_complex_pdb(work_dir: Path) -> Optional[Path]:
-    """Busca o arquivo complex.pdb no work_dir ou subdiretórios imediatos."""
-    direct = work_dir / "complex.pdb"
-    if direct.exists():
-        return direct
-    matches = list(work_dir.glob("*/complex.pdb"))
-    if matches:
-        return matches[0]
+def _find_structure_file(work_dir: Path) -> Optional[Path]:
+    """Busca o arquivo de estrutura (md_clean.gro, complex.pdb, complex.gro ou md.gro) no work_dir ou subdiretórios."""
+    candidates = ["md_clean.gro", "complex.pdb", "complex.gro", "md.gro"]
+    for cand in candidates:
+        direct = work_dir / cand
+        if direct.exists():
+            return direct
+    # Busca recursiva rasa (1 nível)
+    for cand in candidates:
+        matches = list(work_dir.glob(f"*/{cand}"))
+        if matches:
+            return matches[0]
     return None
 
 
@@ -18,25 +22,25 @@ def generate_pymol_script(work_dir: Path) -> Path:
     """
     Gera um script automatizado do PyMOL (show_complex.pml) no diretório de trabalho,
     configurando representação visual científica de alta fidelidade:
-    - Carregamento do complex.pdb
+    - Carregamento de md_clean.gro (ou complex.pdb) e da trajetória ajustada md_fit.xtc
     - Fundo branco de publicação (set bg_rgb, [1, 1, 1])
-    - Proteína em cartoon ciano suave (color gel_cyan, polymer)
-    - Ligante (LIG) em bastões coloridos por elemento (color magenta, resn LIG)
+    - Proteína em cartoon ciano suave (color cyan, polymer)
+    - Ligante (LIG) em bastões coloridos por elemento (color magenta)
     - Seleção e destaque em bastões dos resíduos do sítio ativo mapeados no interactions.json
     - Linhas tracejadas amarelas para pontes de hidrogênio com rótulos de distância
-    - Foco e enquadramento automático do sítio ativo (zoom resn LIG, 8)
+    - Foco e enquadramento automático do sítio ativo (zoom)
 
-    :param work_dir: Diretório de trabalho contendo complex.pdb e interactions.json.
+    :param work_dir: Diretório de trabalho contendo md_clean.gro / complex.pdb e interactions.json.
     :return: Caminho do arquivo show_complex.pml gerado.
     """
     work_dir = Path(work_dir)
     if not work_dir.exists():
         raise FileNotFoundError(f"Diretório de trabalho não encontrado: {work_dir}")
 
-    complex_pdb = _find_complex_pdb(work_dir)
-    if not complex_pdb:
+    struct_file = _find_structure_file(work_dir)
+    if not struct_file:
         raise FileNotFoundError(
-            f"Arquivo 'complex.pdb' não encontrado no diretório: {work_dir}"
+            f"Nenhum arquivo de estrutura ('md_clean.gro' ou 'complex.pdb') encontrado no diretório: {work_dir}"
         )
 
     # Leitura do interactions.json (se existir)
@@ -73,6 +77,13 @@ def generate_pymol_script(work_dir: Path) -> Path:
 
     sorted_resnrs = sorted(list(key_residue_numbers))
 
+    # Verifica se a trajetória tratada md_fit.xtc está presente
+    fit_xtc_file = work_dir / "md_fit.xtc"
+    if not fit_xtc_file.exists():
+        matches_xtc = list(work_dir.glob("*/md_fit.xtc"))
+        if matches_xtc:
+            fit_xtc_file = matches_xtc[0]
+
     # Monta comandos do script PyMOL
     pml_lines = [
         "# ==============================================================================",
@@ -91,21 +102,37 @@ def generate_pymol_script(work_dir: Path) -> Path:
         "set cartoon_smooth_loops, 1",
         "",
         "# 2. Carregamento do Complexo Receptor-Ligante",
-        f"load {complex_pdb.name}, complex",
-        "",
-        "# 3. Representação da Proteína (Cartoon)",
-        "hide everything, all",
-        "show cartoon, polymer",
-        "color cyan, polymer",
-        "set cartoon_transparency, 0.15, polymer",
-        "",
-        "# 4. Representação do Ligante (Sticks)",
-        "show sticks, resn LIG",
-        "color magenta, resn LIG",
-        "util.cnc resn LIG",
-        "set stick_radius, 0.25, resn LIG",
-        "",
+        f"load {struct_file.name}, complex",
     ]
+
+    if fit_xtc_file.exists():
+        pml_lines.extend(
+            [
+                "",
+                "# 2.1 Carregamento da Trajetória Ajustada (PBC Corrigido & Fit rot+trans)",
+                f"load_traj {fit_xtc_file.name}, complex",
+            ]
+        )
+
+    pml_lines.extend(
+        [
+            "",
+            "# 3. Limpeza de Solvente e Representação da Proteína (Cartoon)",
+            "remove resn SOL or resn HOH or resn TIP3 or resn NA or resn CL or resn ION",
+            "hide everything, all",
+            "show cartoon, polymer",
+            "color cyan, polymer",
+            "set cartoon_transparency, 0.15, polymer",
+            "",
+            "# 4. Representação do Ligante (Sticks)",
+            "select ligand, (resn LIG or resn UNK or resn UNL or resn MOL or resn ligand_md or (not polymer and not solvent))",
+            "show sticks, ligand",
+            "color magenta, ligand",
+            "util.cnc ligand",
+            "set stick_radius, 0.25, ligand",
+            "",
+        ]
+    )
 
     # 5. Seleção e exibição dos resíduos do sítio ativo
     if sorted_resnrs:

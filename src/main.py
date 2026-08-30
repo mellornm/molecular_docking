@@ -1305,14 +1305,14 @@ def interactive():
                     console=console,
                 ) as progress:
                     task_pbc = progress.add_task(
-                        description="[A] Tratamento de PBC (nojump e centralização na proteína)",
+                        description="[A] Tratamento de PBC e Fit rot+trans (md_center.xtc, md_fit.xtc, md_clean.gro)",
                         total=1,
                     )
                     md_analysis.fix_pbc(Path(md_dir))
                     progress.update(task_pbc, completed=1)
 
                     task_traj = progress.add_task(
-                        description="[B] Análise da Trajetória Corrigida (RMSD, RMSF, HBond)",
+                        description="[B] Análise da Trajetória Ajustada (RMSD Backbone, RMSF C-α, HBond)",
                         total=1,
                     )
                     md_analysis.analyze_trajectory(Path(md_dir))
@@ -1350,7 +1350,7 @@ def interactive():
 
                 details = {
                     "Diretório": str(md_dir),
-                    "Tratamento PBC": "Concluído (md_fit.xtc gerado)",
+                    "Tratamento PBC": "Concluído (md_fit.xtc e md_clean.gro gerados)",
                     "Análise de Trajetória": "RMSD, RMSF e HBond gerados",
                     "Gráficos Gerados": f"{len(plots)} gráficos salvos"
                     if plots
@@ -1770,14 +1770,14 @@ def md_postprocess_command(
             console=console,
         ) as progress:
             task_pbc = progress.add_task(
-                description="[1/4] Tratamento de Condições Periódicas de Contorno (PBC)...",
+                description="[1/4] Tratamento de PBC e Fit rot+trans (md_center.xtc, md_fit.xtc, md_clean.gro)...",
                 total=1,
             )
             md_analysis.fix_pbc(working_dir)
             progress.update(task_pbc, completed=1)
 
             task_traj = progress.add_task(
-                description="[2/4] Execução das Análises de Trajetória (RMSD, RMSF, HBond)...",
+                description="[2/4] Análise da Trajetória Ajustada (RMSD Backbone, RMSF C-α, HBond)...",
                 total=1,
             )
             md_analysis.analyze_trajectory(working_dir)
@@ -1813,7 +1813,7 @@ def md_postprocess_command(
 
         details = {
             "Diretório": str(working_dir),
-            "Tratamento PBC": "Concluído (md_fit.xtc gerado)",
+            "Tratamento PBC": "Concluído (md_fit.xtc e md_clean.gro gerados)",
             "Análises de Trajetória": "RMSD, RMSF e HBond gerados",
             "Gráficos Gerados": f"{len(plots)} gráficos salvos" if plots else "Nenhum",
         }
