@@ -205,7 +205,11 @@ def generate_html_report(
     # Inferência inteligente de metadados caso não informados
     if not receptor_name:
         for part in work_dir.resolve().parts:
-            if len(part) == 4 and part.isalnum() and (part.isupper() or any(c.isdigit() for c in part)):
+            if (
+                len(part) == 4
+                and part.isalnum()
+                and (part.isupper() or any(c.isdigit() for c in part))
+            ):
                 receptor_name = part
                 break
     if not ligand_name:
@@ -216,10 +220,14 @@ def generate_html_report(
             ligand_name = "Desoxicolato"
 
     receptor_name_display = (
-        receptor_name.strip() if receptor_name and receptor_name.strip() else "Não especificado"
+        receptor_name.strip()
+        if receptor_name and receptor_name.strip()
+        else "Não especificado"
     )
     ligand_name_display = (
-        ligand_name.strip() if ligand_name and ligand_name.strip() else "Não especificado"
+        ligand_name.strip()
+        if ligand_name and ligand_name.strip()
+        else "Não especificado"
     )
 
     # Extração de Métricas Principais

@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 
 import json
+import time
 from pathlib import Path
 
 import questionary
@@ -13,13 +14,14 @@ from rich.table import Table
 from docking import (
     analysis,
     box_utils,
-    preparation,
-    vina_runner,
-    pharmacokinetics,
-    md_prep,
-    md_equil,
     md_analysis,
+    md_equil,
+    md_prep,
+    notifier,
+    pharmacokinetics,
+    preparation,
     report,
+    vina_runner,
     visualization,
 )
 from docking.preparation import get_executable
@@ -302,6 +304,7 @@ def validate(
         )
     )
 
+    start_time = time.time()
     try:
         with Progress(
             SpinnerColumn(),
@@ -380,16 +383,18 @@ def validate(
 
             progress.update(task_plip, completed=1)
 
+        duration = time.time() - start_time
         console.print("\n[bold green]✓ Validação concluída![/bold green]")
         console.print(f"[bold]Energia de Afinidade (Score):[/bold] {score} kcal/mol")
 
+        veredito_str = "Indefinido"
         if rmsd is not None:
             color = "green" if rmsd <= 2.0 else "red"
-            veredito = "SUCESSO" if rmsd <= 2.0 else "FRACASSO"
+            veredito_str = "SUCESSO" if rmsd <= 2.0 else "FRACASSO"
             console.print(
                 f"[bold]RMSD (vs Cristal):[/bold] [{color}]{rmsd:.3f} Å[/{color}]"
             )
-            console.print(f"[bold]Veredito:[/bold] [{color}]{veredito}[/{color}]")
+            console.print(f"[bold]Veredito:[/bold] [{color}]{veredito_str}[/{color}]")
         else:
             console.print(f"[bold red]Erro na análise:[/bold red] {error}")
 
@@ -397,7 +402,34 @@ def validate(
         render_interactions_table(interactions)
         render_admet_table(interactions.get("pharmacokinetics", {}))  # type: ignore
 
+        # Notificação por E-mail
+        details = {
+            "PDB ID": pdb_id,
+            "Afinidade Vina (Score)": f"{score} kcal/mol",
+            "Exaustividade": str(exhaustiveness),
+            "RMSD vs Cristal": f"{rmsd:.3f} Å" if rmsd is not None else "N/A",
+            "Veredito": veredito_str,
+            "Diretório de Resultados": str(results_dir),
+        }
+        notifier.send_email_alert(
+            step_name=f"Validação / Redocking ({pdb_id})",
+            status="success"
+            if (rmsd is not None and rmsd <= 2.0)
+            else ("warning" if rmsd else "error"),
+            duration_seconds=duration,
+            details=details,
+            console_logger=console,
+        )
+
     except Exception as e:
+        duration = time.time() - start_time
+        notifier.send_email_alert(
+            step_name=f"Validação / Redocking ({pdb_id})",
+            status="error",
+            duration_seconds=duration,
+            error_message=str(e),
+            console_logger=console,
+        )
         console.print(f"\n[bold red]FATAL ERROR:[/bold red] {e}")
         raise typer.Exit(code=1)
 
@@ -448,6 +480,7 @@ def screen(
         "size_z": size,
     }
 
+    start_time = time.time()
     try:
         with Progress(
             SpinnerColumn(),
@@ -521,6 +554,7 @@ def screen(
 
             progress.update(task_plip, completed=1)
 
+        duration = time.time() - start_time
         console.print(
             f"\n[bold green]✓ Triagem concluída para {ligand_name}![/bold green]"
         )
@@ -533,7 +567,39 @@ def screen(
         render_interactions_table(interactions)
         render_admet_table(interactions.get("pharmacokinetics", {}))  # type: ignore
 
+        # Notificação por E-mail
+        details = {
+            "Receptor": receptor.name,
+            "Ligante": ligand_name,
+            "Afinidade Vina (Score)": f"{score} kcal/mol",
+            "Exaustividade": str(exhaustiveness),
+            "Diretório de Resultados": str(results_dir),
+        }
+        admet_info = interactions.get("pharmacokinetics", {})
+        if isinstance(admet_info, dict) and "pass_filters" in admet_info:
+            details["Veredito ADMET"] = (
+                "Aprovado (Biodisponível)"
+                if admet_info["pass_filters"]
+                else "Reprovado / Risco"
+            )
+
+        notifier.send_email_alert(
+            step_name=f"Triagem Virtual ({ligand_name})",
+            status="success",
+            duration_seconds=duration,
+            details=details,
+            console_logger=console,
+        )
+
     except Exception as e:
+        duration = time.time() - start_time
+        notifier.send_email_alert(
+            step_name=f"Triagem Virtual ({ligand_name})",
+            status="error",
+            duration_seconds=duration,
+            error_message=str(e),
+            console_logger=console,
+        )
         console.print(f"\n[bold red]FATAL ERROR during screening:[/bold red] {e}")
         raise typer.Exit(code=1)
 
@@ -555,7 +621,8 @@ def interactive():
                 "8. Executar Produção da Dinâmica (100 ns)",
                 "9. Pós-processamento, Gráficos e MM-PBSA da DM",
                 "10. Gerar Relatório Executivo (HTML) e Script PyMOL (3D)",
-                "11. Sair",
+                "11. Testar Configuração de E-mail de Alerta",
+                "12. Sair",
             ],
         ).ask()
 
@@ -609,7 +676,10 @@ def interactive():
 
         elif choice == "5. Preparar Dinâmica Molecular (GROMACS)":
             rec_default = ""
-            for candidate in [Path("data/7CFN/processed/receptor.pdb"), Path("data/1OSV/processed/receptor.pdb")]:
+            for candidate in [
+                Path("data/7CFN/processed/receptor.pdb"),
+                Path("data/1OSV/processed/receptor.pdb"),
+            ]:
                 if candidate.exists():
                     rec_default = str(candidate)
                     break
@@ -619,7 +689,10 @@ def interactive():
                     rec_default = str(found_rec[0])
 
             sdf_default = ""
-            for candidate_sdf in [Path("data/7CFN/results/docked_poses.sdf"), Path("data/screening/desoxicolato/docked_poses.sdf")]:
+            for candidate_sdf in [
+                Path("data/7CFN/results/docked_poses.sdf"),
+                Path("data/screening/desoxicolato/docked_poses.sdf"),
+            ]:
                 if candidate_sdf.exists():
                     sdf_default = str(candidate_sdf)
                     break
@@ -650,6 +723,7 @@ def interactive():
                 )
                 continue
 
+            start_time = time.time()
             try:
                 console.print(
                     Panel.fit(
@@ -738,6 +812,7 @@ def interactive():
                         elif status == "success":
                             progress.update(task_id, completed=1)
 
+                duration = time.time() - start_time
                 console.print(
                     "\n[bold green]✓ Preparação e Minimização de Energia concluídas com sucesso![/bold green]"
                 )
@@ -745,7 +820,29 @@ def interactive():
                     f"Arquivos e outputs gerados em: [cyan]{output_dir}[/cyan]"
                 )
 
+                notifier.send_email_alert(
+                    step_name="Opção 5: Preparação de DM e Minimização de Energia",
+                    status="success",
+                    duration_seconds=duration,
+                    details={
+                        "Receptor": str(receptor_path),
+                        "Ligante": str(sdf_path),
+                        "Diretório de Saída": str(output_dir),
+                        "Minimização (EM)": "em.gro e topol.top gerados com sucesso",
+                        "Próxima Ação": "Rodar Equilíbrio NVT/NPT (Opção 6)",
+                    },
+                    console_logger=console,
+                )
+
             except md_prep.DependencyError as e:
+                duration = time.time() - start_time
+                notifier.send_email_alert(
+                    step_name="Opção 5: Preparação de DM e Minimização de Energia",
+                    status="error",
+                    duration_seconds=duration,
+                    error_message=f"Erro de Dependência: {e}",
+                    console_logger=console,
+                )
                 console.print(
                     Panel(
                         f"[bold red]Erro de Dependência GROMACS/ACPYPE:[/bold red]\n{e}",
@@ -754,6 +851,14 @@ def interactive():
                     )
                 )
             except md_prep.SimulationPrepError as e:
+                duration = time.time() - start_time
+                notifier.send_email_alert(
+                    step_name="Opção 5: Preparação de DM e Minimização de Energia",
+                    status="error",
+                    duration_seconds=duration,
+                    error_message=f"Erro de Preparação: {e}",
+                    console_logger=console,
+                )
                 console.print(
                     Panel(
                         f"[bold red]Erro de Preparação na Dinâmica Molecular:[/bold red]\n{e}",
@@ -762,6 +867,14 @@ def interactive():
                     )
                 )
             except FileNotFoundError as e:
+                duration = time.time() - start_time
+                notifier.send_email_alert(
+                    step_name="Opção 5: Preparação de DM e Minimização de Energia",
+                    status="error",
+                    duration_seconds=duration,
+                    error_message=f"Arquivo Não Encontrado: {e}",
+                    console_logger=console,
+                )
                 console.print(
                     Panel(
                         f"[bold red]Arquivo Não Encontrado:[/bold red]\n{e}",
@@ -770,6 +883,14 @@ def interactive():
                     )
                 )
             except Exception as e:
+                duration = time.time() - start_time
+                notifier.send_email_alert(
+                    step_name="Opção 5: Preparação de DM e Minimização de Energia",
+                    status="error",
+                    duration_seconds=duration,
+                    error_message=f"Erro Inesperado: {e}",
+                    console_logger=console,
+                )
                 console.print(
                     Panel(
                         f"[bold red]Erro Inesperado no Fluxo de Dinâmica:[/bold red]\n{e}",
@@ -791,6 +912,7 @@ def interactive():
                 )
                 continue
 
+            start_time = time.time()
             try:
                 console.print(
                     Panel.fit(
@@ -840,6 +962,7 @@ def interactive():
                         elif status == "success":
                             progress.update(task_id, completed=1)
 
+                duration = time.time() - start_time
                 console.print(
                     "\n[bold green]✓ Equilíbrio NVT/NPT concluído com sucesso![/bold green]"
                 )
@@ -847,7 +970,28 @@ def interactive():
                     f"Estruturas equilibradas geradas em: [cyan]{md_dir}[/cyan]"
                 )
 
+                notifier.send_email_alert(
+                    step_name="Opção 6: Equilíbrio da Dinâmica (NVT/NPT)",
+                    status="success",
+                    duration_seconds=duration,
+                    details={
+                        "Diretório de Trabalho": str(md_dir),
+                        "Equilíbrio NVT": "Concluído (nvt.gro gerado)",
+                        "Equilíbrio NPT": "Concluído (npt.gro gerado)",
+                        "Próxima Ação": "Compilar TPR ou Executar Produção (Opção 7/8)",
+                    },
+                    console_logger=console,
+                )
+
             except md_prep.DependencyError as e:
+                duration = time.time() - start_time
+                notifier.send_email_alert(
+                    step_name="Opção 6: Equilíbrio da Dinâmica (NVT/NPT)",
+                    status="error",
+                    duration_seconds=duration,
+                    error_message=f"Erro de Dependência: {e}",
+                    console_logger=console,
+                )
                 console.print(
                     Panel(
                         f"[bold red]Erro de Dependência GROMACS:[/bold red]\n{e}",
@@ -856,6 +1000,14 @@ def interactive():
                     )
                 )
             except md_prep.SimulationPrepError as e:
+                duration = time.time() - start_time
+                notifier.send_email_alert(
+                    step_name="Opção 6: Equilíbrio da Dinâmica (NVT/NPT)",
+                    status="error",
+                    duration_seconds=duration,
+                    error_message=f"Erro de Execução no GROMACS: {e}",
+                    console_logger=console,
+                )
                 console.print(
                     Panel(
                         f"[bold red]Erro de Execução no Equilíbrio GROMACS:[/bold red]\n{e}",
@@ -864,6 +1016,14 @@ def interactive():
                     )
                 )
             except FileNotFoundError as e:
+                duration = time.time() - start_time
+                notifier.send_email_alert(
+                    step_name="Opção 6: Equilíbrio da Dinâmica (NVT/NPT)",
+                    status="error",
+                    duration_seconds=duration,
+                    error_message=f"Arquivo Não Encontrado: {e}",
+                    console_logger=console,
+                )
                 console.print(
                     Panel(
                         f"[bold red]Arquivo/Diretório Não Encontrado:[/bold red]\n{e}",
@@ -872,6 +1032,14 @@ def interactive():
                     )
                 )
             except Exception as e:
+                duration = time.time() - start_time
+                notifier.send_email_alert(
+                    step_name="Opção 6: Equilíbrio da Dinâmica (NVT/NPT)",
+                    status="error",
+                    duration_seconds=duration,
+                    error_message=f"Erro Inesperado: {e}",
+                    console_logger=console,
+                )
                 console.print(
                     Panel(
                         f"[bold red]Erro Inesperado no Fluxo de Equilíbrio:[/bold red]\n{e}",
@@ -959,6 +1127,7 @@ def interactive():
                 )
                 continue
 
+            start_time = time.time()
             try:
                 console.print(
                     Panel.fit(
@@ -972,6 +1141,7 @@ def interactive():
                     "[yellow]Iniciando a produção da Dinâmica Molecular (grompp & mdrun)...[/yellow]"
                 )
                 md_analysis.run_production_md(Path(md_dir))
+                duration = time.time() - start_time
                 console.print(
                     "[bold green]✓ Produção concluída com sucesso![/bold green]"
                 )
@@ -979,7 +1149,27 @@ def interactive():
                     "[cyan]Execute a opção 9 para tratamento de PBC, gráficos e MM-PBSA.[/cyan]"
                 )
 
+                notifier.send_email_alert(
+                    step_name="Opção 8: Produção de Dinâmica Molecular (100 ns)",
+                    status="success",
+                    duration_seconds=duration,
+                    details={
+                        "Diretório de Trabalho": str(md_dir),
+                        "Trajetória Gerada": "md.xtc e md.gro gerados",
+                        "Próxima Ação Recomendada": "Executar Pós-processamento e MM-PBSA (Opção 9)",
+                    },
+                    console_logger=console,
+                )
+
             except md_prep.DependencyError as e:
+                duration = time.time() - start_time
+                notifier.send_email_alert(
+                    step_name="Opção 8: Produção de Dinâmica Molecular (100 ns)",
+                    status="error",
+                    duration_seconds=duration,
+                    error_message=f"Erro de Dependência: {e}",
+                    console_logger=console,
+                )
                 console.print(
                     Panel(
                         f"[bold red]Erro de Dependência GROMACS:[/bold red]\n{e}",
@@ -988,6 +1178,14 @@ def interactive():
                     )
                 )
             except md_prep.SimulationPrepError as e:
+                duration = time.time() - start_time
+                notifier.send_email_alert(
+                    step_name="Opção 8: Produção de Dinâmica Molecular (100 ns)",
+                    status="error",
+                    duration_seconds=duration,
+                    error_message=f"Erro na Simulação GROMACS: {e}",
+                    console_logger=console,
+                )
                 console.print(
                     Panel(
                         f"[bold red]Erro de Execução no GROMACS:[/bold red]\n{e}",
@@ -996,6 +1194,14 @@ def interactive():
                     )
                 )
             except FileNotFoundError as e:
+                duration = time.time() - start_time
+                notifier.send_email_alert(
+                    step_name="Opção 8: Produção de Dinâmica Molecular (100 ns)",
+                    status="error",
+                    duration_seconds=duration,
+                    error_message=f"Arquivo Não Encontrado: {e}",
+                    console_logger=console,
+                )
                 console.print(
                     Panel(
                         f"[bold red]Arquivo/Diretório Não Encontrado:[/bold red]\n{e}",
@@ -1004,6 +1210,14 @@ def interactive():
                     )
                 )
             except Exception as e:
+                duration = time.time() - start_time
+                notifier.send_email_alert(
+                    step_name="Opção 8: Produção de Dinâmica Molecular (100 ns)",
+                    status="error",
+                    duration_seconds=duration,
+                    error_message=f"Erro Inesperado: {e}",
+                    console_logger=console,
+                )
                 console.print(
                     Panel(
                         f"[bold red]Erro Inesperado no Fluxo de Produção:[/bold red]\n{e}",
@@ -1030,6 +1244,7 @@ def interactive():
                 default=True,
             ).ask()
 
+            start_time = time.time()
             try:
                 console.print(
                     Panel.fit(
@@ -1074,6 +1289,7 @@ def interactive():
                         mmpbsa_res = md_analysis.calculate_mmpbsa(Path(md_dir))
                         progress.update(task_mmpbsa, completed=1)
 
+                duration = time.time() - start_time
                 console.print(
                     "\n[bold green]✓ Pós-processamento concluído com sucesso![/bold green]"
                 )
@@ -1086,6 +1302,15 @@ def interactive():
                         console.print(
                             f"  • [bold]{p_name.upper()}:[/bold] [green]{p_path}[/green]"
                         )
+
+                details = {
+                    "Diretório": str(md_dir),
+                    "Tratamento PBC": "Concluído (md_fit.xtc gerado)",
+                    "Análise de Trajetória": "RMSD, RMSF e HBond gerados",
+                    "Gráficos Gerados": f"{len(plots)} gráficos salvos"
+                    if plots
+                    else "Nenhum",
+                }
 
                 if mmpbsa_res and "energies" in mmpbsa_res:
                     table = Table(
@@ -1127,7 +1352,28 @@ def interactive():
                         f"Sumário JSON salvo em: [cyan]{Path(md_dir) / 'mmpbsa_summary.json'}[/cyan]"
                     )
 
+                    dg_bind = f"{energies['delta_g_binding']['mean']:.2f} ± {energies['delta_g_binding']['std']:.2f} {mmpbsa_res.get('unit', 'kcal/mol')}"
+                    details["MM-PBSA ΔG Total (Ligação)"] = dg_bind
+                    details["Sumário JSON"] = str(Path(md_dir) / "mmpbsa_summary.json")
+
+                # Envio do E-mail de Alerta
+                notifier.send_email_alert(
+                    step_name="Opção 9: Pós-processamento e MM-PBSA da DM",
+                    status="success",
+                    duration_seconds=duration,
+                    details=details,
+                    console_logger=console,
+                )
+
             except md_prep.DependencyError as e:
+                duration = time.time() - start_time
+                notifier.send_email_alert(
+                    step_name="Opção 9: Pós-processamento e MM-PBSA da DM",
+                    status="error",
+                    duration_seconds=duration,
+                    error_message=f"Erro de Dependência: {e}",
+                    console_logger=console,
+                )
                 console.print(
                     Panel(
                         f"[bold red]Erro de Dependência GROMACS/gmx_MMPBSA:[/bold red]\n{e}",
@@ -1136,6 +1382,14 @@ def interactive():
                     )
                 )
             except md_prep.SimulationPrepError as e:
+                duration = time.time() - start_time
+                notifier.send_email_alert(
+                    step_name="Opção 9: Pós-processamento e MM-PBSA da DM",
+                    status="error",
+                    duration_seconds=duration,
+                    error_message=f"Erro no Pós-processamento: {e}",
+                    console_logger=console,
+                )
                 console.print(
                     Panel(
                         f"[bold red]Erro no Pós-processamento / MM-PBSA:[/bold red]\n{e}",
@@ -1144,6 +1398,14 @@ def interactive():
                     )
                 )
             except FileNotFoundError as e:
+                duration = time.time() - start_time
+                notifier.send_email_alert(
+                    step_name="Opção 9: Pós-processamento e MM-PBSA da DM",
+                    status="error",
+                    duration_seconds=duration,
+                    error_message=f"Arquivo Não Encontrado: {e}",
+                    console_logger=console,
+                )
                 console.print(
                     Panel(
                         f"[bold red]Arquivo/Diretório Não Encontrado:[/bold red]\n{e}",
@@ -1152,6 +1414,14 @@ def interactive():
                     )
                 )
             except Exception as e:
+                duration = time.time() - start_time
+                notifier.send_email_alert(
+                    step_name="Opção 9: Pós-processamento e MM-PBSA da DM",
+                    status="error",
+                    duration_seconds=duration,
+                    error_message=f"Erro Inesperado: {e}",
+                    console_logger=console,
+                )
                 console.print(
                     Panel(
                         f"[bold red]Erro Inesperado no Pós-processamento:[/bold red]\n{e}",
@@ -1266,7 +1536,24 @@ def interactive():
                     )
                 )
 
-        elif choice == "11. Sair":
+        elif choice == "11. Testar Configuração de E-mail de Alerta":
+            console.print(
+                Panel.fit(
+                    "[bold blue]Teste de Configuração de E-mail de Alerta (SMTP_SSL)[/bold blue]",
+                    border_style="blue",
+                )
+            )
+            success, msg = notifier.test_email_connection(console_logger=console)
+            if success:
+                console.print(
+                    "\n[bold green]✓ Teste concluído com sucesso! Verifique sua caixa de entrada.[/bold green]"
+                )
+            else:
+                console.print(
+                    f"\n[bold red]✗ Falha no envio do e-mail de teste:[/bold red] {msg}"
+                )
+
+        elif choice == "12. Sair":
             break
 
 
@@ -1333,25 +1620,72 @@ def md_run_command(
         )
     )
 
+    start_time = time.time()
     try:
         console.print(
             "[yellow]Iniciando a produção da Dinâmica Molecular (grompp & mdrun)...[/yellow]"
         )
         md_analysis.run_production_md(working_dir)
+        duration = time.time() - start_time
         console.print("[bold green]✓ Produção concluída com sucesso![/bold green]")
         console.print(
             f"[cyan]Execute 'md-postprocess --dir {working_dir}' para realizar o tratamento de PBC, gráficos e MM-PBSA.[/cyan]"
         )
+
+        notifier.send_email_alert(
+            step_name="Produção de Dinâmica Molecular (GROMACS)",
+            status="success",
+            duration_seconds=duration,
+            details={
+                "Diretório": str(working_dir),
+                "Trajetória Gerada": "md.xtc e md.gro",
+                "Próxima Ação Recomendada": f"Executar md-postprocess --dir {working_dir}",
+            },
+            console_logger=console,
+        )
+
     except md_prep.DependencyError as e:
+        duration = time.time() - start_time
+        notifier.send_email_alert(
+            step_name="Produção de Dinâmica Molecular (GROMACS)",
+            status="error",
+            duration_seconds=duration,
+            error_message=f"Erro de Dependência: {e}",
+            console_logger=console,
+        )
         console.print(f"\n[bold red]Erro de Dependência:[/bold red]\n{e}")
         raise typer.Exit(code=1)
     except md_prep.SimulationPrepError as e:
+        duration = time.time() - start_time
+        notifier.send_email_alert(
+            step_name="Produção de Dinâmica Molecular (GROMACS)",
+            status="error",
+            duration_seconds=duration,
+            error_message=f"Erro na Dinâmica: {e}",
+            console_logger=console,
+        )
         console.print(f"\n[bold red]Erro na Dinâmica:[/bold red]\n{e}")
         raise typer.Exit(code=1)
     except FileNotFoundError as e:
+        duration = time.time() - start_time
+        notifier.send_email_alert(
+            step_name="Produção de Dinâmica Molecular (GROMACS)",
+            status="error",
+            duration_seconds=duration,
+            error_message=f"Arquivo Não Encontrado: {e}",
+            console_logger=console,
+        )
         console.print(f"\n[bold red]Arquivo Não Encontrado:[/bold red]\n{e}")
         raise typer.Exit(code=1)
     except Exception as e:
+        duration = time.time() - start_time
+        notifier.send_email_alert(
+            step_name="Produção de Dinâmica Molecular (GROMACS)",
+            status="error",
+            duration_seconds=duration,
+            error_message=f"Erro Inesperado: {e}",
+            console_logger=console,
+        )
         console.print(f"\n[bold red]Erro Inesperado:[/bold red]\n{e}")
         raise typer.Exit(code=1)
 
@@ -1383,6 +1717,7 @@ def md_postprocess_command(
         )
     )
 
+    start_time = time.time()
     try:
         with Progress(
             SpinnerColumn(),
@@ -1419,6 +1754,7 @@ def md_postprocess_command(
                 mmpbsa_res = md_analysis.calculate_mmpbsa(working_dir)
                 progress.update(task_mmpbsa, completed=1)
 
+        duration = time.time() - start_time
         console.print(
             "\n[bold green]✓ Pós-processamento concluído com sucesso![/bold green]"
         )
@@ -1429,6 +1765,13 @@ def md_postprocess_command(
                 console.print(
                     f"  • [bold]{p_name.upper()}:[/bold] [green]{p_path}[/green]"
                 )
+
+        details = {
+            "Diretório": str(working_dir),
+            "Tratamento PBC": "Concluído (md_fit.xtc gerado)",
+            "Análises de Trajetória": "RMSD, RMSF e HBond gerados",
+            "Gráficos Gerados": f"{len(plots)} gráficos salvos" if plots else "Nenhum",
+        }
 
         if mmpbsa_res and "energies" in mmpbsa_res:
             table = Table(
@@ -1469,16 +1812,61 @@ def md_postprocess_command(
                 f"Sumário JSON salvo em: [cyan]{working_dir / 'mmpbsa_summary.json'}[/cyan]"
             )
 
+            dg_bind = f"{energies['delta_g_binding']['mean']:.2f} ± {energies['delta_g_binding']['std']:.2f} {mmpbsa_res.get('unit', 'kcal/mol')}"
+            details["MM-PBSA ΔG Total (Ligação)"] = dg_bind
+            details["Sumário JSON"] = str(working_dir / "mmpbsa_summary.json")
+
+        # Notificação por E-mail
+        notifier.send_email_alert(
+            step_name="Pós-processamento e MM-PBSA da DM",
+            status="success",
+            duration_seconds=duration,
+            details=details,
+            console_logger=console,
+        )
+
     except md_prep.DependencyError as e:
+        duration = time.time() - start_time
+        notifier.send_email_alert(
+            step_name="Pós-processamento e MM-PBSA da DM",
+            status="error",
+            duration_seconds=duration,
+            error_message=f"Erro de Dependência: {e}",
+            console_logger=console,
+        )
         console.print(f"\n[bold red]Erro de Dependência:[/bold red]\n{e}")
         raise typer.Exit(code=1)
     except md_prep.SimulationPrepError as e:
+        duration = time.time() - start_time
+        notifier.send_email_alert(
+            step_name="Pós-processamento e MM-PBSA da DM",
+            status="error",
+            duration_seconds=duration,
+            error_message=f"Erro no Pós-processamento: {e}",
+            console_logger=console,
+        )
         console.print(f"\n[bold red]Erro no Pós-processamento:[/bold red]\n{e}")
         raise typer.Exit(code=1)
     except FileNotFoundError as e:
+        duration = time.time() - start_time
+        notifier.send_email_alert(
+            step_name="Pós-processamento e MM-PBSA da DM",
+            status="error",
+            duration_seconds=duration,
+            error_message=f"Arquivo Não Encontrado: {e}",
+            console_logger=console,
+        )
         console.print(f"\n[bold red]Arquivo Não Encontrado:[/bold red]\n{e}")
         raise typer.Exit(code=1)
     except Exception as e:
+        duration = time.time() - start_time
+        notifier.send_email_alert(
+            step_name="Pós-processamento e MM-PBSA da DM",
+            status="error",
+            duration_seconds=duration,
+            error_message=f"Erro Inesperado: {e}",
+            console_logger=console,
+        )
         console.print(f"\n[bold red]Erro Inesperado:[/bold red]\n{e}")
         raise typer.Exit(code=1)
 
@@ -1509,6 +1897,7 @@ def md_prep_command(
         )
     )
 
+    start_time = time.time()
     try:
         with Progress(
             SpinnerColumn(),
@@ -1581,21 +1970,90 @@ def md_prep_command(
                 elif status == "success":
                     progress.update(task_id, completed=1)
 
+        duration = time.time() - start_time
         console.print(
             "\n[bold green]✓ Preparação e Minimização de Energia concluídas com sucesso![/bold green]"
         )
         console.print(f"Arquivos e outputs gerados em: [cyan]{out}[/cyan]")
+
+        notifier.send_email_alert(
+            step_name="Preparação de DM e Minimização de Energia",
+            status="success",
+            duration_seconds=duration,
+            details={
+                "Receptor": str(receptor),
+                "Ligante": str(sdf),
+                "Diretório de Saída": str(out),
+                "Minimização (EM)": "em.gro e topol.top gerados com sucesso",
+            },
+            console_logger=console,
+        )
+
     except md_prep.DependencyError as e:
+        duration = time.time() - start_time
+        notifier.send_email_alert(
+            step_name="Preparação de DM e Minimização de Energia",
+            status="error",
+            duration_seconds=duration,
+            error_message=f"Erro de Dependência: {e}",
+            console_logger=console,
+        )
         console.print(f"\n[bold red]Erro de Dependência:[/bold red]\n{e}")
         raise typer.Exit(code=1)
     except md_prep.SimulationPrepError as e:
+        duration = time.time() - start_time
+        notifier.send_email_alert(
+            step_name="Preparação de DM e Minimização de Energia",
+            status="error",
+            duration_seconds=duration,
+            error_message=f"Erro de Preparação: {e}",
+            console_logger=console,
+        )
         console.print(f"\n[bold red]Erro de Preparação:[/bold red]\n{e}")
         raise typer.Exit(code=1)
     except FileNotFoundError as e:
+        duration = time.time() - start_time
+        notifier.send_email_alert(
+            step_name="Preparação de DM e Minimização de Energia",
+            status="error",
+            duration_seconds=duration,
+            error_message=f"Arquivo Não Encontrado: {e}",
+            console_logger=console,
+        )
         console.print(f"\n[bold red]Arquivo Não Encontrado:[/bold red]\n{e}")
         raise typer.Exit(code=1)
     except Exception as e:
+        duration = time.time() - start_time
+        notifier.send_email_alert(
+            step_name="Preparação de DM e Minimização de Energia",
+            status="error",
+            duration_seconds=duration,
+            error_message=f"Erro Inesperado: {e}",
+            console_logger=console,
+        )
         console.print(f"\n[bold red]Erro Inesperado:[/bold red]\n{e}")
+        raise typer.Exit(code=1)
+
+
+@app.command(name="test-email")
+def test_email_command():
+    """
+    TESTAR CONFIGURAÇÃO DE E-MAIL:
+    Envia um e-mail de teste para validar o servidor SMTP (porta 465 SSL) e credenciais do .env.
+    """
+    console.print(
+        Panel.fit(
+            "[bold blue]Teste de Configuração de E-mail de Alerta (SMTP_SSL)[/bold blue]",
+            border_style="blue",
+        )
+    )
+    success, msg = notifier.test_email_connection(console_logger=console)
+    if success:
+        console.print(
+            "\n[bold green]✓ Teste concluído com sucesso! Verifique sua caixa de entrada.[/bold green]"
+        )
+    else:
+        console.print(f"\n[bold red]✗ Falha no teste:[/bold red] {msg}")
         raise typer.Exit(code=1)
 
 

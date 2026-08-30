@@ -20,7 +20,9 @@ def archive_experiment(exp_name: str = None) -> Path:
     default_name = "DS-7CFN"
     if not exp_name:
         try:
-            user_input = input(f"Nome do experimento para arquivamento [{default_name}]: ").strip()
+            user_input = input(
+                f"Nome do experimento para arquivamento [{default_name}]: "
+            ).strip()
             exp_name = user_input if user_input else default_name
         except (EOFError, KeyboardInterrupt):
             exp_name = default_name
@@ -67,7 +69,9 @@ def archive_experiment(exp_name: str = None) -> Path:
             shutil.copytree(src_dir, dest)
             dir_size = sum(f.stat().st_size for f in dest.rglob("*") if f.is_file())
             total_bytes += dir_size
-            print(f"  [OK] ({label:14}) {src_dir.name}/ ({dir_size / (1024 * 1024):.2f} MB)")
+            print(
+                f"  [OK] ({label:14}) {src_dir.name}/ ({dir_size / (1024 * 1024):.2f} MB)"
+            )
             copied_count += 1
             return True
         return False
@@ -84,9 +88,20 @@ def archive_experiment(exp_name: str = None) -> Path:
 
     # Pastas de Receptores (ex: data/7CFN, data/1OSV)
     for rec_dir in data_dir.glob("*"):
-        if rec_dir.is_dir() and rec_dir.name not in ["md_files", "screening", "results"]:
+        if rec_dir.is_dir() and rec_dir.name not in [
+            "md_files",
+            "screening",
+            "results",
+        ]:
             for f in rec_dir.rglob("*"):
-                if f.is_file() and f.suffix in [".pdb", ".pdbqt", ".sdf", ".xml", ".json", ".txt"]:
+                if f.is_file() and f.suffix in [
+                    ".pdb",
+                    ".pdbqt",
+                    ".sdf",
+                    ".xml",
+                    ".json",
+                    ".txt",
+                ]:
                     # Preserva identificador da subpasta relativa
                     rel_sub = f.relative_to(rec_dir).parent
                     target_sub = dest_dirs["docking"] / rec_dir.name / rel_sub
@@ -105,7 +120,11 @@ def archive_experiment(exp_name: str = None) -> Path:
         copy_file(itp, dest_dirs["topology"], "ITP-Forcefield")
 
     # Topologias AMBER geradas para o MM-PBSA
-    for prm in list(md_dir.glob("*.prmtop")) + list(md_dir.glob("*.inpcrd")) + list(md_dir.glob("*.frcmod")):
+    for prm in (
+        list(md_dir.glob("*.prmtop"))
+        + list(md_dir.glob("*.inpcrd"))
+        + list(md_dir.glob("*.frcmod"))
+    ):
         copy_file(prm, dest_dirs["topology"], "AMBER-Parm")
 
     # Diretório ACPYPE completo (parâmetros GAFF2 do ligante)
@@ -129,16 +148,20 @@ def archive_experiment(exp_name: str = None) -> Path:
     print("\n" + "━" * 68)
     print("4. Arquivando Relatórios, Gráficos e Termodinâmica MM-PBSA...")
     print("━" * 68)
-    analysis_files = [
-        md_dir / "report.html",
-        md_dir / "show_complex.pml",
-        md_dir / "FINAL_RESULTS_MMPBSA.dat",
-        md_dir / "FINAL_RESULTS_MMPBSA.csv",
-        md_dir / "RESULTS_gmx_MMPBSA.h5",
-        md_dir / "mmpbsa_summary.json",
-        md_dir / "mmpbsa.in",
-        md_dir / "gmx_MMPBSA.log",
-    ] + sorted(md_dir.glob("*.png")) + sorted(md_dir.glob("*.xvg"))
+    analysis_files = (
+        [
+            md_dir / "report.html",
+            md_dir / "show_complex.pml",
+            md_dir / "FINAL_RESULTS_MMPBSA.dat",
+            md_dir / "FINAL_RESULTS_MMPBSA.csv",
+            md_dir / "RESULTS_gmx_MMPBSA.h5",
+            md_dir / "mmpbsa_summary.json",
+            md_dir / "mmpbsa.in",
+            md_dir / "gmx_MMPBSA.log",
+        ]
+        + sorted(md_dir.glob("*.png"))
+        + sorted(md_dir.glob("*.xvg"))
+    )
 
     for f in analysis_files:
         copy_file(f, dest_dirs["report"], "Report/Data")
@@ -146,7 +169,11 @@ def archive_experiment(exp_name: str = None) -> Path:
     # Relatórios adicionais em screening/ se houver
     for s_dir in data_dir.glob("screening/*"):
         if s_dir.is_dir():
-            for p in list(s_dir.glob("*.html")) + list(s_dir.glob("*.pml")) + list(s_dir.glob("*.json")):
+            for p in (
+                list(s_dir.glob("*.html"))
+                + list(s_dir.glob("*.pml"))
+                + list(s_dir.glob("*.json"))
+            ):
                 copy_file(p, dest_dirs["report"], "Screening")
 
     total_mb = total_bytes / (1024 * 1024)
@@ -156,7 +183,7 @@ def archive_experiment(exp_name: str = None) -> Path:
     print("✨ Arquivamento Concluído com Sucesso!")
     print(f"Total de itens preservados: {copied_count}")
     if total_gb >= 1.0:
-        print(f"Tamanho total do arquivo:   {total_gb:.2f} GB (Economia de mais de 16 GB!)")
+        print(f"Tamanho total do arquivo:   {total_gb:.2f} GB")
     else:
         print(f"Tamanho total do arquivo:   {total_mb:.2f} MB")
     print(f"Pasta de destino:           {archive_base.resolve()}")

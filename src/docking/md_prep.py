@@ -389,12 +389,39 @@ def prepare_md_system(receptor_pdb: Path, ligand_sdf: Path, output_dir: Path):
 
         # Validação: verifica se há resíduos proteicos válidos
         standard_amino_acids = {
-            "ALA", "ARG", "ASN", "ASP", "CYS", "GLN", "GLU", "GLY", "HIS", "ILE",
-            "LEU", "LYS", "MET", "PHE", "PRO", "SER", "THR", "TRP", "TYR", "VAL",
-            "HID", "HIE", "HIP", "CYX", "ASH", "GLH", "LYN", "ARN"
+            "ALA",
+            "ARG",
+            "ASN",
+            "ASP",
+            "CYS",
+            "GLN",
+            "GLU",
+            "GLY",
+            "HIS",
+            "ILE",
+            "LEU",
+            "LYS",
+            "MET",
+            "PHE",
+            "PRO",
+            "SER",
+            "THR",
+            "TRP",
+            "TYR",
+            "VAL",
+            "HID",
+            "HIE",
+            "HIP",
+            "CYX",
+            "ASH",
+            "GLH",
+            "LYN",
+            "ARN",
         }
         protein_res = [
-            r for r in fixer.topology.residues() if r.name.upper() in standard_amino_acids
+            r
+            for r in fixer.topology.residues()
+            if r.name.upper() in standard_amino_acids
         ]
         if not protein_res:
             raise SimulationPrepError(

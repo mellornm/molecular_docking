@@ -577,7 +577,11 @@ def plot_md_results(working_dir: Path) -> Dict[str, Path]:
 
             # Conversão automática de unidades (ps para ns) se necessário
             xaxis_lbl = meta_rmsd.get("xaxis_label", "").lower()
-            if "ps" in xaxis_lbl or "(ps)" in xaxis_lbl or (max(x_time) > 1000 and "ns" not in xaxis_lbl):
+            if (
+                "ps" in xaxis_lbl
+                or "(ps)" in xaxis_lbl
+                or (max(x_time) > 1000 and "ns" not in xaxis_lbl)
+            ):
                 x_time = [t / 1000.0 for t in x_time]
 
             fig, ax = plt.subplots(figsize=(7.5, 4.5), dpi=300)
@@ -699,7 +703,11 @@ def plot_md_results(working_dir: Path) -> Dict[str, Path]:
 
             # Conversão automática de unidades (ps para ns) se necessário
             xaxis_lbl = meta_hb.get("xaxis_label", "").lower()
-            if "ps" in xaxis_lbl or "(ps)" in xaxis_lbl or (max(x_time) > 1000 and "ns" not in xaxis_lbl):
+            if (
+                "ps" in xaxis_lbl
+                or "(ps)" in xaxis_lbl
+                or (max(x_time) > 1000 and "ns" not in xaxis_lbl)
+            ):
                 x_time = [t / 1000.0 for t in x_time]
 
             fig, ax = plt.subplots(figsize=(7.5, 4.5), dpi=300)
@@ -1022,7 +1030,9 @@ radiopt=0,
         # Inclui diretórios padrão de binários do sistema para que programas auxiliares
         # (gmx, cpptraj, tleap, parmchk2, sander) sejam encontrados confiavelmente
         system_paths = ["/usr/bin", "/bin", "/usr/local/bin"]
-        env["PATH"] = f"{exec_dir}{os.pathsep}{os.pathsep.join(system_paths)}{os.pathsep}{env.get('PATH', '')}"
+        env["PATH"] = (
+            f"{exec_dir}{os.pathsep}{os.pathsep.join(system_paths)}{os.pathsep}{env.get('PATH', '')}"
+        )
 
         result = subprocess.run(
             cmd_mmpbsa, cwd=str(working_dir), env=env, capture_output=True, text=True

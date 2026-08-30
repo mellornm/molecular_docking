@@ -133,7 +133,9 @@ def prepare_ligand(pdb_path: Path, out_path: Path):
     if not is_ok:
         prep_fallback = MoleculePreparation(charge_model="zero")
         setups_fallback = prep_fallback.prepare(ligand)
-        pdbqt_string, is_ok, error_msg = PDBQTWriterLegacy.write_string(setups_fallback[0])
+        pdbqt_string, is_ok, error_msg = PDBQTWriterLegacy.write_string(
+            setups_fallback[0]
+        )
 
     if not is_ok or not pdbqt_string.strip():
         raise RuntimeError(f"Falha ao gerar PDBQT do ligante: {error_msg}")
