@@ -248,25 +248,63 @@ def generate_html_report(
 
     admet = data.get("admet") or {}
     admet_pass = admet.get("pass_filters", False)
+    verdict_cat = admet.get("verdict_category")
     hia_status = admet.get("hia_status", "N/A")
     bbb_status = admet.get("bbb_status", "N/A")
     pgp_status = admet.get("pgp_status", "N/A")
     toxic_alerts = admet.get("toxic_alerts", [])
+    total_viol = admet.get("total_violations", 0)
+    all_viol = admet.get("all_violations", [])
+    attention_note = admet.get("attention_note", "")
 
     hbonds = data["interactions"]["hydrogen_bonds"]
     hcontacts = data["interactions"]["hydrophobic_contacts"]
     total_interactions = len(hbonds) + len(hcontacts)
 
-    # Status ADMET Badge
-    if admet:
-        if admet_pass:
-            admet_badge = '<span class="badge badge-success">APROVADO</span>'
-            admet_summary_text = "Molécula com perfil físico-químico favorável, alta absorção e sem alertas de toxicidade."
+    # Fallback caso verdict_category não esteja gravado no JSON legado
+    if not verdict_cat and admet:
+        has_severe_risk = (hia_status == "Baixa Absorção") or (len(toxic_alerts) > 0)
+        if total_viol == 0 and not has_severe_risk:
+            verdict_cat = "APPROVED"
+        elif total_viol == 1 and not has_severe_risk:
+            verdict_cat = "MODERATE"
         else:
-            admet_badge = '<span class="badge badge-danger">REPROVADO / RISCO</span>'
-            admet_summary_text = "A molécula apresentou violações de regras físico-químicas, baixa absorção ou alertas de toxicidade."
+            verdict_cat = "RISK"
+
+    # Status ADMET Badge, Banner e Texto Resumo Dinâmico
+    if admet:
+        if verdict_cat == "APPROVED":
+            admet_badge = '<span class="badge badge-success">APROVADO</span>'
+            admet_banner_class = "veredito-success"
+            admet_banner_icon = "✅"
+            admet_banner_title = "Composto Aprovado na Triagem ADMET"
+            admet_summary_text = (
+                attention_note
+                or "Molécula com 100% de conformidade físico-química (Lipinski & Veber), alta absorção intestinal estimada e ausência de toxicidade estrutural."
+            )
+        elif verdict_cat == "MODERATE":
+            admet_badge = '<span class="badge badge-warning">APROVADO COM RESSALVAS</span>'
+            admet_banner_class = "veredito-warning"
+            admet_banner_icon = "⚠️"
+            admet_banner_title = "Aprovado com Ressalvas (Alerta Moderado)"
+            admet_summary_text = (
+                attention_note
+                or "Molécula com alta absorção intestinal e ausência de toxicidade, apresentando desvio pontual em parâmetro físico-químico aceito pela literatura."
+            )
+        else:
+            admet_badge = '<span class="badge badge-danger">REPROVADO / ALTO RISCO</span>'
+            admet_banner_class = "veredito-danger"
+            admet_banner_icon = "🚫"
+            admet_banner_title = "Alertas Críticos ou Violações ADMET Identificadas"
+            admet_summary_text = (
+                attention_note
+                or "A molécula apresentou restrições em critérios biofarmacêuticos ou toxicológicos."
+            )
     else:
         admet_badge = '<span class="badge badge-secondary">NÃO ANALISADO</span>'
+        admet_banner_class = "veredito-warning"
+        admet_banner_icon = "ℹ️"
+        admet_banner_title = "Triagem ADMET Não Disponível"
         admet_summary_text = (
             "Dados de triagem ADMET não disponíveis no diretório de trabalho."
         )
@@ -321,9 +359,14 @@ def generate_html_report(
             if bbb_status == "Permeável"
             else '<span class="badge badge-warning">Baixa / Incompatível</span>'
         )
+        is_pgp_substrate = (
+            admet.get("pgp_substrate")
+            if "pgp_substrate" in admet
+            else (pgp_status.startswith("Substrato") or ("Substrato" in pgp_status and "Não" not in pgp_status))
+        )
         pgp_badge = (
             '<span class="badge badge-warning">Efluxo Ativo</span>'
-            if "Substrato" in pgp_status
+            if is_pgp_substrate
             else '<span class="badge badge-success">Baixo Efluxo</span>'
         )
 
@@ -938,6 +981,12 @@ def generate_html_report(
             color: #065f46;
         }}
 
+        .veredito-warning {{
+            background-color: var(--warning-bg);
+            border: 1px solid #fde68a;
+            color: #92400e;
+        }}
+
         .veredito-danger {{
             background-color: var(--danger-bg);
             border: 1px solid #fecaca;
@@ -1033,10 +1082,10 @@ def generate_html_report(
                 {admet_badge}
             </div>
             <div class="card-body">
-                <div class="veredito-banner {"veredito-success" if admet_pass else "veredito-danger"}">
-                    <div class="veredito-icon">{"✅" if admet_pass else "⚠️"}</div>
+                <div class="veredito-banner {admet_banner_class}">
+                    <div class="veredito-icon">{admet_banner_icon}</div>
                     <div class="veredito-content">
-                        <h4>{"Composto Aprovado na Triagem ADMET" if admet_pass else "Atenção: Alertas ou Violações ADMET Identificadas"}</h4>
+                        <h4>{admet_banner_title}</h4>
                         <p>{admet_summary_text}</p>
                     </div>
                 </div>

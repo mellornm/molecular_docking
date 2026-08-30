@@ -205,9 +205,14 @@ def render_admet_table(admet: dict):
     )
 
     pgp = admet.get("pgp_status", "N/A")
+    is_pgp_substrate = (
+        admet.get("pgp_substrate")
+        if "pgp_substrate" in admet
+        else (pgp.startswith("Substrato") or ("Substrato" in pgp and "Não" not in pgp))
+    )
     pgp_status = (
         "[bold yellow]Efluxo Ativo[/bold yellow]"
-        if "Substrato" in pgp
+        if is_pgp_substrate
         else "[bold green]Baixo Efluxo[/bold green]"
     )
     table.add_row("  Perfil de Efluxo (P-gp)", pgp, "MW > 400 & TPSA > 80", pgp_status)
@@ -232,38 +237,61 @@ def render_admet_table(admet: dict):
 
     console.print(table)
 
-    # Veredito Geral Integrado
-    pass_filters = admet.get("pass_filters", False)
-    lipinski_pass = admet.get("lipinski_pass", False)
-    veber_pass = admet.get("veber_pass", False)
+    # Veredito Geral Integrado (3 Tiers: Aprovado, Aprovado com Ressalvas, Reprovado/Risco)
+    verdict_cat = admet.get("verdict_category")
+    total_viol = admet.get("total_violations", 0)
+    all_viol = admet.get("all_violations", [])
     hia_status_val = admet.get("hia_status", "")
+    dynamic_points = admet.get("dynamic_points", [])
+    attention_note = admet.get("attention_note", "")
 
-    if pass_filters:
+    # Fallback caso os campos estendidos não estejam presentes
+    if not verdict_cat:
+        has_severe_risk = (hia_status_val == "Baixa Absorção") or (len(toxic_alerts) > 0)
+        if total_viol == 0 and not has_severe_risk:
+            verdict_cat = "APPROVED"
+        elif total_viol == 1 and not has_severe_risk:
+            verdict_cat = "MODERATE"
+        else:
+            verdict_cat = "RISK"
+
+    if verdict_cat == "APPROVED":
         veredito = "[bold white on green]  APROVADO (BIODISPONÍVEL & SEGURO)  [/bold white on green]"
+        points_str = "\n".join(dynamic_points) if dynamic_points else (
+            "• Físico-Química: 100% de conformidade com as regras clássicas de Lipinski e Veber (0 violações).\n"
+            "• Farmacocinética: Alta Absorção Intestinal (HIA) estimada (Egan Egg).\n"
+            "• Toxicidade: Nenhum alerta estrutural reativo ou PAINS identificado."
+        )
         message = (
             f"Veredito de Triagem ADMET: {veredito}\n"
-            f"• Físico-Química: A molécula atende às regras clássicas de Lipinski e Veber.\n"
-            f"• Farmacocinética: Alta Absorção Intestinal (HIA) estimada.\n"
-            f"• Toxicidade: Nenhum alerta estrutural reativo ou PAINS foi identificado."
+            f"{points_str}\n"
+            f"[green]Nota:[/green] {attention_note or 'A molécula possui excelente perfil biofarmacêutico para desenvolvimento oral.'}"
         )
         border_style = "green"
-    else:
-        reasons = []
-        if not lipinski_pass:
-            reasons.append("Violou regras de Lipinski")
-        if not veber_pass:
-            reasons.append("Violou regras de Veber")
-        if hia_status_val == "Baixa Absorção":
-            reasons.append("Baixa Absorção Intestinal (HIA)")
-        if len(toxic_alerts) > 0:
-            reasons.append(f"Alertas de Toxicidade/PAINS: {', '.join(toxic_alerts)}")
 
-        veredito = "[bold white on red]  REPROVADO / RISCO ADMET  [/bold white on red]"
-        reasons_str = "; ".join(reasons)
+    elif verdict_cat == "MODERATE":
+        veredito = "[bold black on yellow]  APROVADO COM RESSALVAS (ALERTA MODERADO)  [/bold black on yellow]"
+        points_str = "\n".join(dynamic_points) if dynamic_points else (
+            f"• Desvio Pontual Tolerado: {all_viol[0] if all_viol else '1 desvio físico-químico'} (desvio único aceito em fármacos comerciais).\n"
+            "• Farmacocinética: Mantém Alta Absorção Intestinal (HIA) estimada (Egan Egg).\n"
+            "• Toxicidade: Nenhum alerta estrutural reativo ou PAINS identificado."
+        )
         message = (
             f"Veredito de Triagem ADMET: {veredito}\n"
-            f"Problemas identificados: [red]{reasons_str}[/red]\n"
-            f"Atenção: A molécula possui propriedades físico-químicas desfavoráveis, baixa absorção intestinal ou riscos de toxicidade estrutural."
+            f"{points_str}\n"
+            f"[yellow]Atenção:[/yellow] {attention_note or 'A molécula mantém bom perfil de absorção e ausência de toxicidade, recomendando-se atenção ao desvio pontual.'}"
+        )
+        border_style = "yellow"
+
+    else:
+        veredito = "[bold white on red]  REPROVADO / RISCO ADMET  [/bold white on red]"
+        points_str = "\n".join(dynamic_points) if dynamic_points else (
+            f"• Problemas Identificados: {', '.join(all_viol) if all_viol else 'Critérios ADMET não atendidos.'}"
+        )
+        message = (
+            f"Veredito de Triagem ADMET: {veredito}\n"
+            f"{points_str}\n"
+            f"[red]Atenção:[/red] {attention_note or 'A molécula possui restrições que podem comprometer sua biodisponibilidade ou segurança.'}"
         )
         border_style = "red"
 
@@ -411,6 +439,18 @@ def validate(
             "Veredito": veredito_str,
             "Diretório de Resultados": str(results_dir),
         }
+        admet_info = interactions.get("pharmacokinetics", {})
+        if isinstance(admet_info, dict) and "pass_filters" in admet_info:
+            v_cat = admet_info.get("verdict_category", "")
+            if v_cat == "APPROVED":
+                v_label = "Aprovado (Biodisponível & Seguro)"
+            elif v_cat == "MODERATE":
+                v_label = "Aprovado com Ressalvas (Alerta Moderado)"
+            elif v_cat == "RISK":
+                v_label = "Reprovado / Risco ADMET"
+            else:
+                v_label = "Aprovado" if admet_info.get("pass_filters") else "Reprovado / Risco"
+            details["Triagem ADMET"] = v_label
         notifier.send_email_alert(
             step_name=f"Validação / Redocking ({pdb_id})",
             status="success"
@@ -577,11 +617,16 @@ def screen(
         }
         admet_info = interactions.get("pharmacokinetics", {})
         if isinstance(admet_info, dict) and "pass_filters" in admet_info:
-            details["Veredito ADMET"] = (
-                "Aprovado (Biodisponível)"
-                if admet_info["pass_filters"]
-                else "Reprovado / Risco"
-            )
+            v_cat = admet_info.get("verdict_category", "")
+            if v_cat == "APPROVED":
+                v_label = "Aprovado (Biodisponível & Seguro)"
+            elif v_cat == "MODERATE":
+                v_label = "Aprovado com Ressalvas (Alerta Moderado)"
+            elif v_cat == "RISK":
+                v_label = "Reprovado / Risco ADMET"
+            else:
+                v_label = "Aprovado" if admet_info.get("pass_filters") else "Reprovado / Risco"
+            details["Veredito ADMET"] = v_label
 
         notifier.send_email_alert(
             step_name=f"Triagem Virtual ({ligand_name})",
