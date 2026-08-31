@@ -4,7 +4,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import matplotlib  # type: ignore[reportMissingImports]
 
@@ -1616,33 +1616,51 @@ def calculate_mmpbsa(working_dir: Path) -> Dict[str, Any]:
     _ensure_gmx_mmpbsa_cys_patched()
 
     # 1. Identificação do número de frames e cálculo da janela de equilíbrio (Últimos 40%)
-    gmx_bin = find_executable("gmx")
-    total_frames = 1000
-    if gmx_bin:
-        try:
-            env = os.environ.copy()
-            exec_dir = str(Path(gmx_bin).parent)
-            env["PATH"] = f"{exec_dir}{os.pathsep}{env.get('PATH', '')}"
+    total_frames = None
+    # 1.1 Tenta obter o número exato de frames a partir de um arquivo .xvg já calculado
+    for xvg_name in ["rmsd.xvg", "gyrate.xvg", "sasa.xvg", "hbond.xvg"]:
+        xvg_file = working_dir / xvg_name
+        if xvg_file.exists():
+            try:
+                x_vals, _ = parse_xvg(xvg_file)
+                if x_vals and len(x_vals) > 0:
+                    total_frames = len(x_vals)
+                    break
+            except Exception:
+                pass
 
-            chk_res = subprocess.run(
-                [gmx_bin, "check", "-f", "md_fit.xtc"],
-                cwd=str(working_dir),
-                env=env,
-                capture_output=True,
-                text=True,
-            )
-            chk_out = (chk_res.stderr or "") + "\n" + (chk_res.stdout or "")
-            frame_matches = re.findall(
-                r"(?:Last\s+frame|Step|Coords|Time|Found)\s+(\d+)", chk_out, re.IGNORECASE
-            )
-            if frame_matches:
-                f_count = max(int(m) for m in frame_matches)
-                if f_count > 0:
-                    total_frames = f_count
-        except Exception:
-            pass
+    # 1.2 Se não encontrou via XVG, usa 'gmx check -f md_fit.xtc' com regex preciso
+    if total_frames is None:
+        gmx_bin = find_executable("gmx")
+        if gmx_bin:
+            try:
+                env = os.environ.copy()
+                exec_dir = str(Path(gmx_bin).parent)
+                env["PATH"] = f"{exec_dir}{os.pathsep}{env.get('PATH', '')}"
 
-    # Protocolo de Janela Termodinâmica: Últimos 40% (ex: 600 a 1000 para 1000 frames totais)
+                chk_res = subprocess.run(
+                    [gmx_bin, "check", "-f", "md_fit.xtc"],
+                    cwd=str(working_dir),
+                    env=env,
+                    capture_output=True,
+                    text=True,
+                )
+                chk_out = (chk_res.stderr or "") + "\n" + (chk_res.stdout or "")
+                # Na tabela do gmx check: 'Coords       10001    10' ou 'Step         10001    10'
+                m_table = re.search(r"(?:Coords|Step)\s+(\d+)", chk_out)
+                if m_table:
+                    total_frames = int(m_table.group(1))
+                else:
+                    m_last = re.search(r"Last\s+frame\s+(\d+)", chk_out)
+                    if m_last:
+                        total_frames = int(m_last.group(1)) + 1
+            except Exception:
+                pass
+
+    if total_frames is None or total_frames <= 0:
+        total_frames = 1000
+
+    # Protocolo de Janela Termodinâmica: Últimos 40% (ex: 6001 a 10001 para 10001 frames totais)
     startframe = max(1, int(round(total_frames * 0.60)))
     endframe = total_frames
     frames_in_window = max(1, endframe - startframe + 1)
