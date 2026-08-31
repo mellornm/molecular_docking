@@ -246,7 +246,7 @@ def run_production_md(working_dir: Path):
         )
 
 
-def fix_pbc(working_dir: Path) -> Path:
+def fix_pbc(working_dir: Path, force: bool = False) -> Path:
     """
     Executa o tratamento completo e automatizado de Condições Periódicas de Contorno (PBC)
     e remoção de movimentos de corpo rígido (fit rot+trans) via GROMACS (gmx trjconv):
@@ -263,11 +263,18 @@ def fix_pbc(working_dir: Path) -> Path:
        gmx trjconv -s md.tpr -f md.gro -o md_clean.gro -pbc mol -center
        (Input stdin: '1\\n0\\n' -> Protein para centralizar, System para salvar)
 
+    Se 'md_fit.xtc' e 'md_clean.gro' já existirem no diretório e force=False, reutiliza os arquivos existentes.
     Retorna o caminho do arquivo de trajetória corrigida md_fit.xtc.
     """
     working_dir = Path(working_dir)
     if not working_dir.exists():
         raise FileNotFoundError(f"Diretório de trabalho não encontrado: {working_dir}")
+
+    md_fit_path = working_dir / "md_fit.xtc"
+    md_clean_path = working_dir / "md_clean.gro"
+
+    if not force and md_fit_path.exists() and md_clean_path.exists():
+        return md_fit_path
 
     tpr_file = working_dir / "md.tpr"
     xtc_file = working_dir / "md.xtc"
@@ -387,10 +394,13 @@ def fix_pbc(working_dir: Path) -> Path:
             step_name="Etapa 3 (Estrutura Estática Limpa para PyMOL - md_clean.gro)",
         )
 
-    md_fit_path = working_dir / "md_fit.xtc"
     if not md_fit_path.exists():
         raise FileNotFoundError(
             f"Arquivo de trajetória corrigida 'md_fit.xtc' não foi gerado em: {working_dir}"
+        )
+    if not md_clean_path.exists():
+        raise FileNotFoundError(
+            f"Arquivo de estrutura estática limpa 'md_clean.gro' não foi gerado em: {working_dir}"
         )
 
     return md_fit_path
@@ -398,8 +408,8 @@ def fix_pbc(working_dir: Path) -> Path:
 
 def analyze_trajectory(working_dir: Path):
     """
-    Executa a análise quantitativa da trajetória de Dinâmica Molecular no GROMACS:
-    1. RMSD do Backbone da Proteína (gmx rms -s md.tpr -f md_fit.xtc -o rmsd.xvg -tu ns)
+    Executa a análise quantitativa da trajetória de Dinâmica Molecular no GROMACS (Janela Completa: 0 - 100 ns):
+    1. RMSD do Backbone da Proteína e do Ligante (gmx rms -s md.tpr -f md_fit.xtc -o rmsd.xvg -tu ns)
     2. RMSF por resíduo dos Carbonos Alfa (gmx rmsf -s md.tpr -f md_fit.xtc -o rmsf.xvg -res)
     3. Monitoramento de Pontes de Hidrogênio Proteína-Ligante (gmx hbond -s md.tpr -f md_fit.xtc -num hbond.xvg -tu ns)
 
@@ -458,7 +468,16 @@ def analyze_trajectory(working_dir: Path):
                 f"Falha ao executar comando de análise ({step_name}): {e}"
             )
 
-    # 1. RMSD do esqueleto da proteína (Backbone/Backbone -> 4 4)
+    index_file = working_dir / "index.ndx"
+    prot_name = "Protein"
+    lig_name = "LIG"
+    prot_idx = 1
+    lig_idx = 13
+    if index_file.exists():
+        groups_list = get_index_groups(index_file)
+        prot_name, lig_name, prot_idx, lig_idx = identify_complex_groups(groups_list)
+
+    # 1.1 RMSD do esqueleto da proteína (Backbone/Backbone -> 4 4)
     cmd_rmsd = [
         gmx_bin,
         "rms",
@@ -472,6 +491,32 @@ def analyze_trajectory(working_dir: Path):
         "ns",
     ]
     run_analysis_cmd(cmd_rmsd, working_dir, "4\n4\n", "RMSD do esqueleto da proteína (Backbone)")
+
+    # 1.2 RMSD do Ligante no sítio ativo (Fit: Backbone 4, Calc: Ligand) para monitorar persistência e ausência de unbinding
+    if index_file.exists() and lig_idx is not None:
+        try:
+            cmd_rmsd_lig = [
+                gmx_bin,
+                "rms",
+                "-s",
+                "md.tpr",
+                "-f",
+                "md_fit.xtc",
+                "-o",
+                "rmsd_lig.xvg",
+                "-tu",
+                "ns",
+                "-n",
+                "index.ndx",
+            ]
+            run_analysis_cmd(
+                cmd_rmsd_lig,
+                working_dir,
+                f"4\n{lig_idx}\n",
+                f"RMSD do ligante ({lig_name}) no sítio ativo",
+            )
+        except Exception:
+            pass
 
     # 2. RMSF por resíduo dos Carbonos Alfa (C-alpha -> 3)
     cmd_rmsf = [
@@ -487,7 +532,7 @@ def analyze_trajectory(working_dir: Path):
     ]
     run_analysis_cmd(cmd_rmsf, working_dir, "3\n", "RMSF por resíduo (C-alpha)")
 
-    # 3. Pontes de hidrogênio entre Proteína e Ligante
+    # 3. Pontes de hidrogênio entre Proteína e Ligante ao longo dos 100 ns
     cmd_hbond = [
         gmx_bin,
         "hbond",
@@ -500,11 +545,8 @@ def analyze_trajectory(working_dir: Path):
         "-tu",
         "ns",
     ]
-    index_file = working_dir / "index.ndx"
     if index_file.exists():
         cmd_hbond.extend(["-n", "index.ndx"])
-        groups_list = get_index_groups(index_file)
-        prot_name, lig_name, _, _ = identify_complex_groups(groups_list)
         hbond_input = f"{prot_name}\n{lig_name}\n"
     else:
         hbond_input = "Protein\nLIG\n"
@@ -576,13 +618,13 @@ def parse_xvg(file_path: Path) -> Tuple[List[float], List[float]]:
 
 def plot_md_results(working_dir: Path) -> Dict[str, Path]:
     """
-    Lê os arquivos .xvg gerados na análise (rmsd.xvg, rmsf.xvg, hbond.xvg) e gera gráficos
-    com padrão estético científico de publicação (300 DPI) utilizando matplotlib e seaborn.
+    Lê os arquivos .xvg gerados na análise (rmsd.xvg, rmsd_lig.xvg, rmsf.xvg, hbond.xvg) e gera gráficos
+    com padrão estético científico de publicação (300 DPI) cobrindo a extensão completa da simulação (0 - 100 ns).
 
     Salva diretamente no working_dir:
-    - rmsd.png: Tempo (ns) vs RMSD (nm)
-    - rmsf.png: Número do Resíduo vs Flutuação RMSF (nm)
-    - hbond.png: Tempo (ns) vs Número de Pontes de Hidrogênio
+    - rmsd.png: Tempo (ns) vs RMSD (nm) para Backbone da Proteína e Ligante no sítio ativo (0 - 100 ns)
+    - rmsf.png: Número do Resíduo vs Flutuação RMSF (nm) (0 - 100 ns)
+    - hbond.png: Tempo (ns) vs Número de Pontes de Hidrogênio (0 - 100 ns)
 
     Retorna um dicionário mapeando o nome da análise ao caminho do arquivo .png gerado.
     """
@@ -609,12 +651,13 @@ def plot_md_results(working_dir: Path) -> Dict[str, Path]:
 
     generated_plots: Dict[str, Path] = {}
 
-    # 1. Gráfico de RMSD
+    # 1. Gráfico de RMSD (Janela Completa: 0 - 100 ns - Backbone & Ligante)
     rmsd_file = working_dir / "rmsd.xvg"
+    rmsd_lig_file = working_dir / "rmsd_lig.xvg"
+
     if rmsd_file.exists():
         x_time, y_rmsd, meta_rmsd = parse_xvg_with_meta(rmsd_file)
         if x_time and y_rmsd:
-            # Ordena por tempo caso necessário
             sorted_rmsd = sorted(zip(x_time, y_rmsd), key=lambda p: p[0])
             x_time = [p[0] for p in sorted_rmsd]
             y_rmsd = [p[1] for p in sorted_rmsd]
@@ -628,46 +671,79 @@ def plot_md_results(working_dir: Path) -> Dict[str, Path]:
             ):
                 x_time = [t / 1000.0 for t in x_time]
 
-            fig, ax = plt.subplots(figsize=(7.5, 4.5), dpi=300)
+            fig, ax = plt.subplots(figsize=(8.0, 4.8), dpi=300)
             ax.plot(
-                x_time, y_rmsd, color="#1f77b4", linewidth=1.5, label="Backbone RMSD"
+                x_time, y_rmsd, color="#1f77b4", linewidth=1.6, label="Protein Backbone"
             )
 
-            # Adiciona linha de média
+            # Adiciona linha de média da proteína
             mean_rmsd = sum(y_rmsd) / len(y_rmsd)
             ax.axhline(
                 mean_rmsd,
-                color="#d62728",
+                color="#1f77b4",
                 linestyle="--",
-                alpha=0.7,
-                label=f"Mean: {mean_rmsd:.3f} nm",
+                alpha=0.6,
+                label=f"Protein Mean: {mean_rmsd:.3f} nm",
             )
+
+            max_x = max(x_time) if x_time else 100.0
+
+            # Plota RMSD do ligante se disponível para demonstrar persistência no sítio
+            if rmsd_lig_file.exists():
+                x_lig, y_lig, meta_lig = parse_xvg_with_meta(rmsd_lig_file)
+                if x_lig and y_lig:
+                    sorted_lig = sorted(zip(x_lig, y_lig), key=lambda p: p[0])
+                    x_lig = [p[0] for p in sorted_lig]
+                    y_lig = [p[1] for p in sorted_lig]
+                    xaxis_lbl_lig = meta_lig.get("xaxis_label", "").lower()
+                    if (
+                        "ps" in xaxis_lbl_lig
+                        or "(ps)" in xaxis_lbl_lig
+                        or (max(x_lig) > 1000 and "ns" not in xaxis_lbl_lig)
+                    ):
+                        x_lig = [t / 1000.0 for t in x_lig]
+                    ax.plot(
+                        x_lig,
+                        y_lig,
+                        color="#e76f51",
+                        linewidth=1.4,
+                        alpha=0.85,
+                        label="Ligand (Site Persistence)",
+                    )
+                    mean_lig = sum(y_lig) / len(y_lig)
+                    ax.axhline(
+                        mean_lig,
+                        color="#e76f51",
+                        linestyle=":",
+                        alpha=0.7,
+                        label=f"Ligand Mean: {mean_lig:.3f} nm",
+                    )
+                    max_x = max(max_x, max(x_lig))
 
             ax.set_xlabel("Time (ns)", fontweight="bold")
             ax.set_ylabel("RMSD (nm)", fontweight="bold")
             ax.set_title(
-                "Time Evolution of Protein Backbone RMSD",
+                "Structural Stability & Ligand Residence (0 - 100 ns)",
                 fontweight="bold",
                 pad=12,
             )
-            ax.set_xlim(left=0, right=max(x_time) if x_time else 1)
+            ax.set_xlim(left=0, right=max_x)
             ax.set_ylim(bottom=0)
-            ax.legend(loc="lower right", frameon=True, framealpha=0.9)
+            ax.legend(loc="upper left", frameon=True, framealpha=0.9)
 
             out_rmsd_png = working_dir / "rmsd.png"
             fig.savefig(out_rmsd_png, dpi=300, bbox_inches="tight")  # type: ignore
             plt.close(fig)
             generated_plots["rmsd"] = out_rmsd_png
 
-    # 2. Gráfico de RMSF
+    # 2. Gráfico de RMSF (Janela Completa: 0 - 100 ns)
     rmsf_file = working_dir / "rmsf.xvg"
     if rmsf_file.exists():
         x_res, y_rmsf, _ = parse_xvg_with_meta(rmsf_file)
         if x_res and y_rmsf:
             fig, ax = plt.subplots(figsize=(8.5, 4.5), dpi=300)
 
-            # Tratamento para ordenação e suporte a múltiplos segmentos/cadeias:
-            # Caso os índices de resíduo sejam estritamente únicos (cadeia única):
+            # Tratamento para ordenação e suporte a múltiplos segmentos/cadeias
             if len(set(x_res)) == len(x_res):
                 sorted_data = sorted(zip(x_res, y_rmsf), key=lambda p: p[0])
                 x_plot = [p[0] for p in sorted_data]
@@ -675,9 +751,6 @@ def plot_md_results(working_dir: Path) -> Dict[str, Path]:
                 chain_boundaries = []
                 x_label = "Residue Number"
             else:
-                # Sistema multimérico / multichain onde a numeração reseta (ex: Cadeia A 1..229, Cadeia B 1..229)
-                # Agrupa por segmentos contínuos, ordena internamente e aplica numeração cumulativa contínua
-                # para evitar as linhas diagonais de retorno (resíduo 229 -> 1) e zig-zags entre cadeias.
                 segments: List[List[Tuple[float, float]]] = []
                 current_segment: List[Tuple[float, float]] = []
 
@@ -709,7 +782,6 @@ def plot_md_results(working_dir: Path) -> Dict[str, Path]:
             ax.plot(x_plot, y_plot, color="#2a9d8f", linewidth=1.4, label="C-α RMSF")
             ax.fill_between(x_plot, y_plot, color="#2a9d8f", alpha=0.25)  # type: ignore
 
-            # Delimitação visual sutil para interfaces entre cadeias em complexos multiméricos
             for cb in chain_boundaries:
                 ax.axvline(
                     x=cb + 0.5,
@@ -722,7 +794,7 @@ def plot_md_results(working_dir: Path) -> Dict[str, Path]:
             ax.set_xlabel(x_label, fontweight="bold")
             ax.set_ylabel("RMSF (nm)", fontweight="bold")
             ax.set_title(
-                "Root Mean Square Fluctuation per Residue", fontweight="bold", pad=12
+                "Root Mean Square Fluctuation per Residue (0 - 100 ns)", fontweight="bold", pad=12
             )
             ax.set_xlim(
                 left=min(x_plot) if x_plot else 0, right=max(x_plot) if x_plot else 1
@@ -735,17 +807,15 @@ def plot_md_results(working_dir: Path) -> Dict[str, Path]:
             plt.close(fig)
             generated_plots["rmsf"] = out_rmsf_png
 
-    # 3. Gráfico de Pontes de Hidrogênio (HBond)
+    # 3. Gráfico de Pontes de Hidrogênio (HBond) (Janela Completa: 0 - 100 ns)
     hbond_file = working_dir / "hbond.xvg"
     if hbond_file.exists():
         x_time, y_hb, meta_hb = parse_xvg_with_meta(hbond_file)
         if x_time and y_hb:
-            # Garante ordenação temporal antes de traçar
             sorted_hb = sorted(zip(x_time, y_hb), key=lambda p: p[0])
             x_time = [p[0] for p in sorted_hb]
             y_hb = [p[1] for p in sorted_hb]
 
-            # Conversão automática de unidades (ps para ns) se necessário
             xaxis_lbl = meta_hb.get("xaxis_label", "").lower()
             if (
                 "ps" in xaxis_lbl
@@ -761,13 +831,11 @@ def plot_md_results(working_dir: Path) -> Dict[str, Path]:
                 color="#e76f51",
                 linewidth=1.0,
                 alpha=0.75,
-                label="Pontes de H",
+                label="H-Bonds count",
             )
 
-            # Cálculo de média simples ou móvel se houver pontos suficientes
             if len(y_hb) >= 10:
                 window_size = max(5, len(y_hb) // 25)
-                # Média móvel manual pura em python
                 smoothed = []
                 for i in range(len(y_hb)):
                     start_i = max(0, i - window_size // 2)
@@ -783,8 +851,8 @@ def plot_md_results(working_dir: Path) -> Dict[str, Path]:
 
             ax.set_xlabel("Time (ns)", fontweight="bold")
             ax.set_ylabel("H-Bonds count", fontweight="bold")
-            ax.set_title("Protein–Ligand Hydrogen Bonds", fontweight="bold", pad=12)
-            ax.set_xlim(left=0, right=max(x_time) if x_time else 1)
+            ax.set_title("Protein–Ligand Hydrogen Bonds (0 - 100 ns)", fontweight="bold", pad=12)
+            ax.set_xlim(left=0, right=max(x_time) if x_time else 100.0)
             ax.set_ylim(bottom=0)
             ax.legend(loc="upper right", frameon=True, framealpha=0.9)
 
@@ -946,11 +1014,12 @@ def _ensure_gmx_mmpbsa_cys_patched() -> None:
 
 def calculate_mmpbsa(working_dir: Path) -> Dict[str, Any]:
     """
-    Executa o cálculo de Energia Livre de Ligação MM-PBSA via gmx_MMPBSA:
-    1. Gera o arquivo de configuração mmpbsa.in com 100 frames distribuídos uniformemente ao longo de md_fit.xtc.
+    Executa o cálculo de Energia Livre de Ligação MM-PBSA via gmx_MMPBSA (Janela Termodinâmica: 60 - 100 ns / Últimos 40%):
+    1. Extrai o número total de frames e configura dinamicamente o arquivo 'mmpbsa.in' para os últimos 40% (estado estacionário).
+       Ex: para 1000 frames totais, define startframe=600, endframe=1000, interval=2.
     2. Identifica os grupos do receptor (Protein) e ligante (ligand_md / LIG) em index.ndx.
-    3. Executa o gmx_MMPBSA via subprocesso com tratamento automático para sistemas multicadeia.
-    4. Extrai contribuições energéticas (Van der Waals, Eletrostática, Solvatação Polar e Apolar) e Delta G.
+    3. Executa o gmx_MMPBSA via subprocesso não-interativo com captura de stderr.
+    4. Extrai contribuições energéticas (Van der Waals, Eletrostática, Solvatação Polar e Apolar) e Delta G total.
     5. Salva os resultados estruturados no arquivo mmpbsa_summary.json.
 
     Retorna o dicionário com o sumário dos resultados termodinâmicos.
@@ -980,9 +1049,9 @@ def calculate_mmpbsa(working_dir: Path) -> Dict[str, Any]:
     # Garante que o patch de suporte a sistemas multicadeia esteja ativo
     _ensure_gmx_mmpbsa_cys_patched()
 
-    # 1. Identificação do número de frames e cálculo de intervalo para 100 frames uniformes
+    # 1. Identificação do número de frames e cálculo da janela de equilíbrio (Últimos 40%)
     gmx_bin = find_executable("gmx")
-    total_frames = 100
+    total_frames = 1000
     if gmx_bin:
         try:
             env = os.environ.copy()
@@ -998,7 +1067,7 @@ def calculate_mmpbsa(working_dir: Path) -> Dict[str, Any]:
             )
             chk_out = (chk_res.stderr or "") + "\n" + (chk_res.stdout or "")
             frame_matches = re.findall(
-                r"(?:Last\s+frame|Step|Coords|Time)\s+(\d+)", chk_out, re.IGNORECASE
+                r"(?:Last\s+frame|Step|Coords|Time|Found)\s+(\d+)", chk_out, re.IGNORECASE
             )
             if frame_matches:
                 f_count = max(int(m) for m in frame_matches)
@@ -1007,15 +1076,24 @@ def calculate_mmpbsa(working_dir: Path) -> Dict[str, Any]:
         except Exception:
             pass
 
-    interval = max(1, total_frames // 100)
+    # Protocolo de Janela Termodinâmica: Últimos 40% (ex: 600 a 1000 para 1000 frames totais)
+    startframe = max(1, int(round(total_frames * 0.60)))
+    endframe = total_frames
+    frames_in_window = max(1, endframe - startframe + 1)
+    interval = max(1, frames_in_window // 200)
+    if frames_in_window <= 400 and interval > 2:
+        interval = 2
+    elif interval < 1:
+        interval = 1
 
     # 2. Criação do arquivo de entrada mmpbsa.in
     mmpbsa_in_path = working_dir / "mmpbsa.in"
     mmpbsa_in_content = f"""&general
 sys_name="Protein_Ligand_Complex",
-startframe=1,
-endframe=999999,
+startframe={startframe},
+endframe={endframe},
 interval={interval},
+verbose=2,
 /
 &gb
 igb=5,
@@ -1024,7 +1102,7 @@ saltcon=0.150,
 &pb
 istrng=0.150,
 fillratio=4.0,
-radiopt=0,
+radiopt=1,
 /
 """
     with open(mmpbsa_in_path, "w", encoding="utf-8") as f:
@@ -1071,8 +1149,6 @@ radiopt=0,
     try:
         env = os.environ.copy()
         exec_dir = str(Path(mmpbsa_bin).parent)
-        # Inclui diretórios padrão de binários do sistema para que programas auxiliares
-        # (gmx, cpptraj, tleap, parmchk2, sander) sejam encontrados confiavelmente
         system_paths = ["/usr/bin", "/bin", "/usr/local/bin"]
         env["PATH"] = (
             f"{exec_dir}{os.pathsep}{os.pathsep.join(system_paths)}{os.pathsep}{env.get('PATH', '')}"
@@ -1099,8 +1175,13 @@ radiopt=0,
     # 5. Parse dos resultados e geração de mmpbsa_summary.json
     dat_output = working_dir / "FINAL_RESULTS_MMPBSA.dat"
     summary_data = parse_mmpbsa_dat(dat_output)
-    summary_data["frames_extracted_interval"] = interval
+    summary_data["thermodynamic_window"] = "60 - 100 ns (Últimos 40% - Estado Estacionário)"
+    summary_data["startframe"] = startframe
+    summary_data["endframe"] = endframe
+    summary_data["interval"] = interval
     summary_data["total_frames_estimated"] = total_frames
+    summary_data["frames_analyzed"] = max(1, (endframe - startframe + 1) // interval)
+    summary_data["protocol"] = "Dupla Escala Temporal (MM-PBSA 60-100 ns / Trajetória 0-100 ns)"
     summary_data["raw_output_file"] = "FINAL_RESULTS_MMPBSA.dat"
 
     summary_json_path = working_dir / "mmpbsa_summary.json"

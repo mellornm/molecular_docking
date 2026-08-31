@@ -243,8 +243,13 @@ def generate_html_report(
         dg_std = dg_bind.get("std", 0.0)
         unit = mmpbsa_data.get("unit", "kcal/mol")
         mmpbsa_str = f"{dg_mean:.2f} ± {dg_std:.2f} {unit}"
+        mmpbsa_subtext = mmpbsa_data.get(
+            "thermodynamic_window",
+            "Janela Termodinâmica: 60 - 100 ns (Últimos 40% - Estado Estacionário)",
+        )
     else:
         mmpbsa_str = "Não executado / N/A"
+        mmpbsa_subtext = "Janela Termodinâmica: 60 - 100 ns (Pendente)"
 
     admet = data.get("admet") or {}
     admet_pass = admet.get("pass_filters", False)
@@ -465,20 +470,20 @@ def generate_html_report(
             """
 
     rmsd_card = render_plot_card(
-        "RMSD - Desvio Quadrático Médio",
-        "Estabilidade Estrutural do Backbone da Proteína ao Longo do Tempo (ns)",
+        "RMSD - Estabilidade Estrutural e Persistência no Sítio (0 - 100 ns)",
+        "Evolução Temporal do Backbone e Ligante no Sítio Ativo via Trajetória Ajustada (md_fit.xtc)",
         rmsd_img,
         "Gráfico rmsd.png não encontrado no diretório de trabalho.",
     )
     rmsf_card = render_plot_card(
-        "RMSF - Flutuação Atômica por Resíduo",
-        "Flexibilidade Conformacional dos Carbonos Alfa (C-α)",
+        "RMSF - Flutuação Atômica por Resíduo (0 - 100 ns)",
+        "Flexibilidade Conformacional dos Carbonos Alfa (C-α) ao Longo de Toda a Simulação",
         rmsf_img,
         "Gráfico rmsf.png não encontrado no diretório de trabalho.",
     )
     hbond_card = render_plot_card(
-        "Pontes de Hidrogênio Intermoleculares",
-        "Monitoramento Temporal de Contatos Específicos Receptor-Ligante",
+        "Pontes de Hidrogênio Intermoleculares (0 - 100 ns)",
+        "Persistência de Contatos Receptor-Ligante e Ausência de Desprendimento (Unbinding)",
         hbond_img,
         "Gráfico hbond.png não encontrado no diretório de trabalho.",
     )
@@ -492,14 +497,36 @@ def generate_html_report(
         apolar = mmpbsa_energies.get("nonpolar_solvation", {"mean": 0.0, "std": 0.0})
         dg = mmpbsa_energies.get("delta_g_binding", {"mean": 0.0, "std": 0.0})
         unit = mmpbsa_data.get("unit", "kcal/mol")
+        window_label = mmpbsa_data.get(
+            "thermodynamic_window",
+            "Janela Termodinâmica: 60 - 100 ns (Últimos 40% - Estado Estacionário)",
+        )
+        start_f = mmpbsa_data.get("startframe", 600)
+        end_f = mmpbsa_data.get("endframe", 1000)
+        interval_f = mmpbsa_data.get("interval", 2)
+        total_samples = mmpbsa_data.get(
+            "frames_analyzed", max(1, (end_f - start_f + 1) // interval_f)
+        )
 
         mmpbsa_table_html = f"""
-        <div class="card mt-4">
+        <section class="card mt-4">
             <div class="card-header">
-                <h3>Decomposição de Energia Livre MM-PBSA (Solvente Explícito)</h3>
-                <span class="badge badge-primary">{unit}</span>
+                <h3>⚡ Energia Livre de Ligação MM-PBSA (Solvente Explícito)</h3>
+                <span class="badge badge-primary">{window_label}</span>
             </div>
             <div class="card-body">
+                <div class="veredito-banner" style="background-color: #f0fdf4; border: 1px solid #bbf7d0; color: #166534; margin-bottom: 1.25rem;">
+                    <div class="veredito-icon">⚖️</div>
+                    <div class="veredito-content">
+                        <h4>Protocolo Padronizado de Dupla Escala Temporal</h4>
+                        <p style="margin-top: 0.25rem; line-height: 1.5;">
+                            <strong>• Análises Estruturais Globais (0 - 100 ns):</strong> Calculadas sobre toda a trajetória corrigida (<code>md_fit.xtc</code>) para comprovar a persistência do ligante no sítio ativo e a ausência de <em>unbinding</em>.<br/>
+                            <strong>• Janela Termodinâmica MM-PBSA (60 - 100 ns / Últimos 40% - Estado Estacionário):</strong> Amostragem restrita à fase de produção em estado estacionário, eliminando o ruído conformacional da fase de relaxamento inicial (<em>induced-fit</em>) e reduzindo a variância amostral.<br/>
+                            <strong>• Parâmetros de Amostragem:</strong> Frames {start_f} a {end_f} (Intervalo = {interval_f} &bull; Total Amostrado = {total_samples} frames).
+                        </p>
+                    </div>
+                </div>
+
                 <div class="table-responsive">
                     <table class="table">
                         <thead>
@@ -512,34 +539,34 @@ def generate_html_report(
                         <tbody>
                             <tr>
                                 <td><strong>Van der Waals (&Delta;E<sub>vdw</sub>)</strong></td>
-                                <td>Atrações dispersivas e empacotamento estérico</td>
+                                <td>Atrações dispersivas e empacotamento estérico no sítio ativo</td>
                                 <td class="text-right text-mono">{vdw.get("mean", 0.0):.2f} &plusmn; {vdw.get("std", 0.0):.2f}</td>
                             </tr>
                             <tr>
                                 <td><strong>Eletrostática (&Delta;E<sub>elec</sub>)</strong></td>
-                                <td>Interações de Coulomb e pares iônicos</td>
+                                <td>Interações de Coulomb e atração eletrostática específica</td>
                                 <td class="text-right text-mono">{eel.get("mean", 0.0):.2f} &plusmn; {eel.get("std", 0.0):.2f}</td>
                             </tr>
                             <tr>
                                 <td><strong>Solvatação Polar (&Delta;G<sub>polar</sub>)</strong></td>
-                                <td>Custo de dessolvatação eletrostática (Poisson-Boltzmann)</td>
+                                <td>Custo termodinâmico de dessolvatação eletrostática (Poisson-Boltzmann)</td>
                                 <td class="text-right text-mono">{polar.get("mean", 0.0):.2f} &plusmn; {polar.get("std", 0.0):.2f}</td>
                             </tr>
                             <tr>
                                 <td><strong>Solvatação Apolar (&Delta;G<sub>apolar</sub>)</strong></td>
-                                <td>Efeito hidrofóbico e área de superfície acessível ao solvente (SASA)</td>
+                                <td>Efeito hidrofóbico e variação da área de superfície acessível (SASA)</td>
                                 <td class="text-right text-mono">{apolar.get("mean", 0.0):.2f} &plusmn; {apolar.get("std", 0.0):.2f}</td>
                             </tr>
                             <tr class="highlight-row">
                                 <td><strong>&Delta;G Total de Ligação (&Delta;G<sub>bind</sub>)</strong></td>
-                                <td><strong>Afinidade Termodinâmica Global MM-PBSA</strong></td>
+                                <td><strong>Afinidade Termodinâmica Global MM-PBSA (Estado Estacionário)</strong></td>
                                 <td class="text-right text-mono font-bold text-success">{dg.get("mean", 0.0):.2f} &plusmn; {dg.get("std", 0.0):.2f}</td>
                             </tr>
                         </tbody>
                     </table>
                 </div>
             </div>
-        </div>
+        </section>
         """
 
     # Template HTML Completo
@@ -1061,7 +1088,7 @@ def generate_html_report(
             <div class="metric-card card-mmpbsa">
                 <div class="metric-label">Energia Livre MM-PBSA</div>
                 <div class="metric-value">{mmpbsa_str}</div>
-                <div class="metric-subtext">&Delta;G<sub>bind</sub> solvatação explícita</div>
+                <div class="metric-subtext">{mmpbsa_subtext}</div>
             </div>
             <div class="metric-card card-admet">
                 <div class="metric-label">Veredito ADMET</div>
@@ -1136,8 +1163,8 @@ def generate_html_report(
         <!-- Seção 3: Galeria de Dinâmica Molecular (GROMACS) -->
         <section class="card">
             <div class="card-header">
-                <h3>📈 Monitoramento de Estabilidade na Dinâmica Molecular (GROMACS)</h3>
-                <span class="badge badge-secondary">Publicação 300 DPI</span>
+                <h3>📈 Monitoramento de Estabilidade Estrutural Global (0 - 100 ns)</h3>
+                <span class="badge badge-secondary">Trajetória: md_fit.xtc &bull; 300 DPI</span>
             </div>
             <div class="card-body">
                 <div class="gallery-grid">

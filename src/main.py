@@ -1285,7 +1285,7 @@ def interactive():
                 continue
 
             run_mmpbsa = questionary.confirm(
-                "Deseja executar o cálculo de Energia Livre de Ligação MM-PBSA?",
+                "Deseja executar o cálculo de Energia Livre de Ligação MM-PBSA (Janela: 60 - 100 ns / Últimos 40%)?",
                 default=True,
             ).ask()
 
@@ -1294,7 +1294,8 @@ def interactive():
                 console.print(
                     Panel.fit(
                         f"[bold blue]Pós-processamento, Gráficos e MM-PBSA da Dinâmica Molecular[/bold blue]\n"
-                        f"Diretório de Trabalho: {md_dir}",
+                        f"Diretório de Trabalho: {md_dir}\n"
+                        f"[dim]Protocolo: Dupla Escala Temporal (Estrutural: 0 - 100 ns | Termodinâmica: 60 - 100 ns)[/dim]",
                         border_style="blue",
                     )
                 )
@@ -1305,21 +1306,21 @@ def interactive():
                     console=console,
                 ) as progress:
                     task_pbc = progress.add_task(
-                        description="[A] Tratamento de PBC e Fit rot+trans (md_center.xtc, md_fit.xtc, md_clean.gro)",
+                        description="[1/4] Tratamento Automatizado de Trajetória (md_center.xtc, md_fit.xtc, md_clean.gro)...",
                         total=1,
                     )
                     md_analysis.fix_pbc(Path(md_dir))
                     progress.update(task_pbc, completed=1)
 
                     task_traj = progress.add_task(
-                        description="[B] Análise da Trajetória Ajustada (RMSD Backbone, RMSF C-α, HBond)",
+                        description="[2/4] Análises Estruturais Globais (0 - 100 ns: RMSD Backbone + Ligante, RMSF C-α, HBond)...",
                         total=1,
                     )
                     md_analysis.analyze_trajectory(Path(md_dir))
                     progress.update(task_traj, completed=1)
 
                     task_plot = progress.add_task(
-                        description="[C] Geração de Gráficos Científicos de Publicação (300 DPI)",
+                        description="[3/4] Geração de Gráficos Científicos de Publicação (Janela Completa: 0 - 100 ns, 300 DPI)...",
                         total=1,
                     )
                     plots = md_analysis.plot_md_results(Path(md_dir))
@@ -1328,7 +1329,7 @@ def interactive():
                     mmpbsa_res = None
                     if run_mmpbsa:
                         task_mmpbsa = progress.add_task(
-                            description="[D] Cálculo de Energia Livre MM-PBSA (gmx_MMPBSA)",
+                            description="[4/4] Cálculo de Energia Livre MM-PBSA (Janela: 60 - 100 ns / Últimos 40% - Estado Estacionário)...",
                             total=1,
                         )
                         mmpbsa_res = md_analysis.calculate_mmpbsa(Path(md_dir))
@@ -1341,7 +1342,7 @@ def interactive():
 
                 if plots:
                     console.print(
-                        "\n[bold cyan]Gráficos de Publicação Gerados:[/bold cyan]"
+                        "\n[bold cyan]Gráficos Científicos Gerados (Janela: 0 - 100 ns):[/bold cyan]"
                     )
                     for p_name, p_path in plots.items():
                         console.print(
@@ -1351,19 +1352,19 @@ def interactive():
                 details = {
                     "Diretório": str(md_dir),
                     "Tratamento PBC": "Concluído (md_fit.xtc e md_clean.gro gerados)",
-                    "Análise de Trajetória": "RMSD, RMSF e HBond gerados",
-                    "Gráficos Gerados": f"{len(plots)} gráficos salvos"
+                    "Análise Estrutural": "Janela Completa 0 - 100 ns (RMSD Backbone + Ligante, RMSF, HBond)",
+                    "Gráficos Gerados": f"{len(plots)} gráficos salvos (300 DPI)"
                     if plots
                     else "Nenhum",
                 }
 
                 if mmpbsa_res and "energies" in mmpbsa_res:
                     table = Table(
-                        title="Resumo Termodinâmico de Energia Livre MM-PBSA",
+                        title="Resumo Termodinâmico MM-PBSA [Janela: 60 - 100 ns (Últimos 40% - Estado Estacionário)]",
                         show_header=True,
                         header_style="bold magenta",
                     )
-                    table.add_column("Componente Energético", style="dim", width=32)
+                    table.add_column("Componente Energético", style="dim", width=34)
                     table.add_column(
                         f"Energia ({mmpbsa_res.get('unit', 'kcal/mol')})",
                         justify="right",
@@ -1398,6 +1399,7 @@ def interactive():
                     )
 
                     dg_bind = f"{energies['delta_g_binding']['mean']:.2f} ± {energies['delta_g_binding']['std']:.2f} {mmpbsa_res.get('unit', 'kcal/mol')}"
+                    details["MM-PBSA Janela"] = "60 - 100 ns (Últimos 40% - Estado Estacionário)"
                     details["MM-PBSA ΔG Total (Ligação)"] = dg_bind
                     details["Sumário JSON"] = str(Path(md_dir) / "mmpbsa_summary.json")
 
@@ -1748,16 +1750,17 @@ def md_postprocess_command(
 ):
     """
     PÓS-PROCESSAMENTO, GRÁFICOS E MM-PBSA DA DINÂMICA MOLECULAR:
-    1. Tratamento de Condições Periódicas de Contorno (PBC: remoção de saltos e centralização).
-    2. Análise de trajetória (RMSD, RMSF, HBond) utilizando a trajetória corrigida (md_fit.xtc).
-    3. Geração automatizada de gráficos científicos (.png a 300 DPI) para publicação.
-    4. Cálculo de energia livre de ligação MM-PBSA (gmx_MMPBSA) e exportação de mmpbsa_summary.json.
+    1. Tratamento de Condições Periódicas de Contorno (PBC: remoção de saltos e centralização via md_fit.xtc e md_clean.gro).
+    2. Análises Estruturais Globais (0 - 100 ns: RMSD Backbone + Ligante, RMSF C-α, HBond) utilizando a trajetória corrigida (md_fit.xtc).
+    3. Geração automatizada de gráficos científicos (.png a 300 DPI) para publicação cobrindo a janela completa de 0 - 100 ns.
+    4. Cálculo de energia livre de ligação MM-PBSA (gmx_MMPBSA) na Janela Termodinâmica de estado estacionário (60 - 100 ns / Últimos 40%).
     """
     working_dir = Path(working_dir)
     console.print(
         Panel.fit(
             f"[bold blue]Pós-processamento, Gráficos e MM-PBSA da Dinâmica Molecular[/bold blue]\n"
-            f"Diretório de Trabalho: {working_dir}",
+            f"Diretório de Trabalho: {working_dir}\n"
+            f"[dim]Protocolo: Dupla Escala Temporal (Estrutural: 0 - 100 ns | Termodinâmica: 60 - 100 ns)[/dim]",
             border_style="blue",
         )
     )
@@ -1770,21 +1773,21 @@ def md_postprocess_command(
             console=console,
         ) as progress:
             task_pbc = progress.add_task(
-                description="[1/4] Tratamento de PBC e Fit rot+trans (md_center.xtc, md_fit.xtc, md_clean.gro)...",
+                description="[1/4] Tratamento Automatizado de Trajetória (md_center.xtc, md_fit.xtc, md_clean.gro)...",
                 total=1,
             )
             md_analysis.fix_pbc(working_dir)
             progress.update(task_pbc, completed=1)
 
             task_traj = progress.add_task(
-                description="[2/4] Análise da Trajetória Ajustada (RMSD Backbone, RMSF C-α, HBond)...",
+                description="[2/4] Análises Estruturais Globais (0 - 100 ns: RMSD Backbone + Ligante, RMSF C-α, HBond)...",
                 total=1,
             )
             md_analysis.analyze_trajectory(working_dir)
             progress.update(task_traj, completed=1)
 
             task_plot = progress.add_task(
-                description="[3/4] Geração de Gráficos Científicos de Publicação (300 DPI)...",
+                description="[3/4] Geração de Gráficos Científicos de Publicação (Janela Completa: 0 - 100 ns, 300 DPI)...",
                 total=1,
             )
             plots = md_analysis.plot_md_results(working_dir)
@@ -1793,7 +1796,7 @@ def md_postprocess_command(
             mmpbsa_res = None
             if not skip_mmpbsa:
                 task_mmpbsa = progress.add_task(
-                    description="[4/4] Cálculo de Energia Livre de Ligação MM-PBSA (gmx_MMPBSA)...",
+                    description="[4/4] Cálculo de Energia Livre MM-PBSA (Janela: 60 - 100 ns / Últimos 40% - Estado Estacionário)...",
                     total=1,
                 )
                 mmpbsa_res = md_analysis.calculate_mmpbsa(working_dir)
@@ -1805,7 +1808,9 @@ def md_postprocess_command(
         )
 
         if plots:
-            console.print("\n[bold cyan]Gráficos Gerados:[/bold cyan]")
+            console.print(
+                "\n[bold cyan]Gráficos Científicos Gerados (Janela: 0 - 100 ns):[/bold cyan]"
+            )
             for p_name, p_path in plots.items():
                 console.print(
                     f"  • [bold]{p_name.upper()}:[/bold] [green]{p_path}[/green]"
@@ -1814,17 +1819,19 @@ def md_postprocess_command(
         details = {
             "Diretório": str(working_dir),
             "Tratamento PBC": "Concluído (md_fit.xtc e md_clean.gro gerados)",
-            "Análises de Trajetória": "RMSD, RMSF e HBond gerados",
-            "Gráficos Gerados": f"{len(plots)} gráficos salvos" if plots else "Nenhum",
+            "Análise Estrutural": "Janela Completa 0 - 100 ns (RMSD Backbone + Ligante, RMSF, HBond)",
+            "Gráficos Gerados": f"{len(plots)} gráficos salvos (300 DPI)"
+            if plots
+            else "Nenhum",
         }
 
         if mmpbsa_res and "energies" in mmpbsa_res:
             table = Table(
-                title="Resultados Termodinâmicos MM-PBSA",
+                title="Resumo Termodinâmico MM-PBSA [Janela: 60 - 100 ns (Últimos 40% - Estado Estacionário)]",
                 show_header=True,
                 header_style="bold magenta",
             )
-            table.add_column("Componente Energético", style="dim", width=32)
+            table.add_column("Componente Energético", style="dim", width=34)
             table.add_column(
                 f"Energia ({mmpbsa_res.get('unit', 'kcal/mol')})", justify="right"
             )
@@ -1858,6 +1865,7 @@ def md_postprocess_command(
             )
 
             dg_bind = f"{energies['delta_g_binding']['mean']:.2f} ± {energies['delta_g_binding']['std']:.2f} {mmpbsa_res.get('unit', 'kcal/mol')}"
+            details["MM-PBSA Janela"] = "60 - 100 ns (Últimos 40% - Estado Estacionário)"
             details["MM-PBSA ΔG Total (Ligação)"] = dg_bind
             details["Sumário JSON"] = str(working_dir / "mmpbsa_summary.json")
 

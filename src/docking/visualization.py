@@ -4,7 +4,7 @@ from typing import Any, Dict, List, Optional, Set
 
 
 def _find_structure_file(work_dir: Path) -> Optional[Path]:
-    """Busca o arquivo de estrutura (md_clean.gro, complex.pdb, complex.gro ou md.gro) no work_dir ou subdiretórios."""
+    """Busca o arquivo de estrutura (md_clean.gro prioritário, complex.pdb, complex.gro ou md.gro) no work_dir ou subdiretórios."""
     candidates = ["md_clean.gro", "complex.pdb", "complex.gro", "md.gro"]
     for cand in candidates:
         direct = work_dir / cand
@@ -15,6 +15,14 @@ def _find_structure_file(work_dir: Path) -> Optional[Path]:
         matches = list(work_dir.glob(f"*/{cand}"))
         if matches:
             return matches[0]
+    # Busca em diretório md_files adjacente/pai
+    for parent in [work_dir] + list(work_dir.parents):
+        candidate_md = parent / "md_files"
+        if candidate_md.exists():
+            for cand in candidates:
+                cand_file = candidate_md / cand
+                if cand_file.exists():
+                    return cand_file
     return None
 
 
@@ -83,12 +91,24 @@ def generate_pymol_script(work_dir: Path) -> Path:
         matches_xtc = list(work_dir.glob("*/md_fit.xtc"))
         if matches_xtc:
             fit_xtc_file = matches_xtc[0]
+        else:
+            for parent in [work_dir] + list(work_dir.parents):
+                candidate_md = parent / "md_files"
+                if candidate_md.exists() and (candidate_md / "md_fit.xtc").exists():
+                    fit_xtc_file = candidate_md / "md_fit.xtc"
+                    break
+
+    try:
+        struct_rel = str(struct_file.resolve().relative_to(work_dir.resolve())).replace("\\", "/")
+    except ValueError:
+        struct_rel = str(struct_file.name)
 
     # Monta comandos do script PyMOL
     pml_lines = [
         "# ==============================================================================",
         "# PyMOL Automated Visualization Script",
         "# Generated automatically by Molecular Docking Pipeline",
+        "# Structure: md_clean.gro / Trajectory: md_fit.xtc",
         "# ==============================================================================",
         "",
         "# 1. Inicialização e Configurações de Fundo e Renderização",
@@ -101,16 +121,20 @@ def generate_pymol_script(work_dir: Path) -> Path:
         "set cartoon_fancy_helices, 1",
         "set cartoon_smooth_loops, 1",
         "",
-        "# 2. Carregamento do Complexo Receptor-Ligante",
-        f"load {struct_file.name}, complex",
+        "# 2. Carregamento do Complexo Receptor-Ligante (md_clean.gro)",
+        f"load {struct_rel}, complex",
     ]
 
-    if fit_xtc_file.exists():
+    if fit_xtc_file and fit_xtc_file.exists():
+        try:
+            xtc_rel = str(fit_xtc_file.resolve().relative_to(work_dir.resolve())).replace("\\", "/")
+        except ValueError:
+            xtc_rel = str(fit_xtc_file.name)
         pml_lines.extend(
             [
                 "",
-                "# 2.1 Carregamento da Trajetória Ajustada (PBC Corrigido & Fit rot+trans)",
-                f"load_traj {fit_xtc_file.name}, complex",
+                "# 2.1 Carregamento da Trajetória Ajustada (md_fit.xtc - PBC Corrigido & Fit rot+trans)",
+                f"load_traj {xtc_rel}, complex",
             ]
         )
 
