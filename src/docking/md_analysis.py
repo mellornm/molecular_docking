@@ -1186,20 +1186,53 @@ def parse_mmpbsa_decomp(decomp_path: Path) -> List[Dict[str, Any]]:
     with open(decomp_path, "r", encoding="utf-8", errors="ignore") as f:
         lines = f.readlines()
 
-    in_decomp = False
+    in_total_decomp = False
     for line in lines:
         line_clean = line.strip()
-        if not line_clean or line_clean.startswith("#") or line_clean.startswith("---"):
+        if not line_clean or line_clean.startswith("#") or line_clean.startswith("---") or line_clean.startswith("|"):
             continue
 
-        if "Energy Decomposition" in line_clean or "Residue |" in line_clean or "TDC" in line_clean or "DELTAS:" in line_clean:
-            in_decomp = True
+        if "Total Energy Decomposition:" in line_clean or "DELTAS:" in line_clean or "Energy Decomposition Analysis" in line_clean or "TDC" in line_clean:
+            in_total_decomp = True
             continue
 
-        if in_decomp:
-            if "Residue" in line_clean or "===" in line_clean or "Location" in line_clean:
+        # Sai da seção Total Energy Decomposition se encontrar outra seção como Sidechain ou Backbone
+        if in_total_decomp and ("Sidechain Energy Decomposition:" in line_clean or "Backbone Energy Decomposition:" in line_clean):
+            break
+
+        if in_total_decomp:
+            if line_clean.startswith("Residue") or line_clean.startswith(",Avg") or line_clean.startswith("==="):
                 continue
 
+            # 1. Formato CSV do gmx_MMPBSA (Residue, Internal, vdW, Elec, Polar, Non-Polar, Total)
+            if "," in line_clean:
+                parts = [p.strip() for p in line_clean.split(",")]
+                if len(parts) >= 17:
+                    res_raw = parts[0]
+                    if not res_raw or res_raw.lower().startswith("residue") or res_raw.lower().startswith("avg"):
+                        continue
+                    try:
+                        vdw_mean = float(parts[4])
+                        eel_mean = float(parts[7])
+                        polar_mean = float(parts[10])
+                        apolar_mean = float(parts[13])
+                        total_mean = float(parts[16])
+                        total_std = float(parts[17]) if len(parts) > 17 and parts[17] else 0.0
+
+                        residues_data.append({
+                            "residue": res_raw,
+                            "vdw": round(vdw_mean, 3),
+                            "electrostatic": round(eel_mean, 3),
+                            "polar": round(polar_mean, 3),
+                            "nonpolar": round(apolar_mean, 3),
+                            "total": round(total_mean, 3),
+                            "std": round(total_std, 3),
+                        })
+                        continue
+                    except ValueError:
+                        pass
+
+            # 2. Formato clássico com pipe (|)
             if "|" in line_clean:
                 cols = [c.strip() for c in line_clean.split("|")]
                 if len(cols) >= 4:
@@ -1231,7 +1264,7 @@ def parse_mmpbsa_decomp(decomp_path: Path) -> List[Dict[str, Any]]:
                             "vdw": round(vdw_mean, 3),
                             "electrostatic": round(eel_mean, 3),
                             "total": round(total_mean, 3),
-                            "std": round(total_std, 3)
+                            "std": round(total_std, 3),
                         })
                     except ValueError:
                         continue
@@ -1246,7 +1279,7 @@ def parse_mmpbsa_decomp(decomp_path: Path) -> List[Dict[str, Any]]:
                             "vdw": 0.0,
                             "electrostatic": 0.0,
                             "total": round(total_mean, 3),
-                            "std": 0.0
+                            "std": 0.0,
                         })
                     except ValueError:
                         continue
@@ -1660,17 +1693,31 @@ def calculate_mmpbsa(working_dir: Path) -> Dict[str, Any]:
     if total_frames is None or total_frames <= 0:
         total_frames = 1000
 
+    # Limpa arquivos temporários e topologias de execuções anteriores para evitar conflitos
+    for stale_file in list(working_dir.glob("_GMXMMPBSA_*")) + [
+        working_dir / "COM.prmtop",
+        working_dir / "REC.prmtop",
+        working_dir / "LIG.prmtop",
+        working_dir / "COM_traj_0.xtc",
+    ]:
+        try:
+            if stale_file.is_file():
+                stale_file.unlink(missing_ok=True)
+        except Exception:
+            pass
+
     # Protocolo de Janela Termodinâmica: Últimos 40% (ex: 6001 a 10001 para 10001 frames totais)
     startframe = max(1, int(round(total_frames * 0.60)))
     endframe = total_frames
     frames_in_window = max(1, endframe - startframe + 1)
-    interval = max(1, frames_in_window // 200)
-    if frames_in_window <= 400 and interval > 2:
+    # Amostragem padrão de excelência termodinâmica: ~100 snapshots uniformes na janela estacionária
+    interval = max(1, frames_in_window // 100)
+    if frames_in_window <= 200 and interval > 2:
         interval = 2
     elif interval < 1:
         interval = 1
 
-    # 2. Criação do arquivo de entrada mmpbsa.in
+    # 2. Criação do arquivo de entrada mmpbsa.in (MM-GBSA com Decomposição por Resíduo OBC2)
     mmpbsa_in_path = working_dir / "mmpbsa.in"
     mmpbsa_in_content = f"""&general
 sys_name="Protein_Ligand_Complex",
@@ -1682,11 +1729,6 @@ verbose=2,
 &gb
 igb=5,
 saltcon=0.150,
-/
-&pb
-istrng=0.150,
-fillratio=4.0,
-radiopt=1,
 /
 &decomp
 idecomp=2,
