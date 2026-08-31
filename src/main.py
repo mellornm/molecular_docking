@@ -1313,7 +1313,7 @@ def interactive():
                     progress.update(task_pbc, completed=1)
 
                     task_traj = progress.add_task(
-                        description="[2/4] Análises Estruturais Globais (0 - 100 ns: RMSD Backbone + Ligante, RMSF C-α, HBond)...",
+                        description="[2/4] Análises Estruturais Globais (0 - 100 ns: RMSD, RMSF, HBond, Rg, SASA, Clustering & Exportação CSV)...",
                         total=1,
                     )
                     md_analysis.analyze_trajectory(Path(md_dir))
@@ -1780,7 +1780,7 @@ def md_postprocess_command(
             progress.update(task_pbc, completed=1)
 
             task_traj = progress.add_task(
-                description="[2/4] Análises Estruturais Globais (0 - 100 ns: RMSD Backbone + Ligante, RMSF C-α, HBond)...",
+                description="[2/4] Análises Estruturais Globais (0 - 100 ns: RMSD, RMSF, HBond, Rg, SASA, Clustering & Exportação CSV)...",
                 total=1,
             )
             md_analysis.analyze_trajectory(working_dir)

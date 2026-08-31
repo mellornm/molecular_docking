@@ -54,11 +54,13 @@ def parse_pipeline_artifacts(work_dir: Path) -> Tuple[Dict[str, Any], List[str]]
             "hydrogen_bonds": [],
             "hydrophobic_contacts": [],
         },
+        "hbond_occupancy": [],
         "mmpbsa": None,
         "plots": {
             "rmsd": None,
             "rmsf": None,
             "hbond": None,
+            "decomp": None,
         },
     }
 
@@ -113,6 +115,23 @@ def parse_pipeline_artifacts(work_dir: Path) -> Tuple[Dict[str, Any], List[str]]
         except Exception as e:
             warnings.append(f"Erro ao processar 'interactions.json': {e}")
 
+    # 2.1 Parse de Ocupação Temporal de Pontes de Hidrogênio (hbond_occupancy.json)
+    hbond_occ_file = _find_file(work_dir, ["hbond_occupancy.json"])
+    if not hbond_occ_file:
+        for parent in [work_dir] + list(work_dir.parents):
+            candidate_md = parent / "md_files"
+            if candidate_md.exists():
+                hbond_occ_file = _find_file(candidate_md, ["hbond_occupancy.json"])
+                if hbond_occ_file:
+                    break
+
+    if hbond_occ_file and hbond_occ_file.exists():
+        try:
+            with open(hbond_occ_file, "r", encoding="utf-8") as f:
+                data["hbond_occupancy"] = json.load(f)
+        except Exception:
+            pass
+
     # Se pharmacokinetics.json existir isoladamente, dá prioridade ou preenche
     if pharmacokinetics_file and pharmacokinetics_file.exists():
         try:
@@ -152,13 +171,14 @@ def parse_pipeline_artifacts(work_dir: Path) -> Tuple[Dict[str, Any], List[str]]
         )
 
     # 4. Busca e Codificação de Gráficos de Dinâmica Molecular (PNG)
-    for plot_name in ["rmsd", "rmsf", "hbond"]:
-        img_file = _find_file(work_dir, [f"{plot_name}.png"])
+    for plot_name in ["rmsd", "rmsf", "hbond", "gyrate", "sasa", "decomp"]:
+        img_name = "decomp_mmpbsa.png" if plot_name == "decomp" else f"{plot_name}.png"
+        img_file = _find_file(work_dir, [img_name])
         if not img_file:
             for parent in [work_dir] + list(work_dir.parents):
                 candidate_md = parent / "md_files"
                 if candidate_md.exists():
-                    img_file = _find_file(candidate_md, [f"{plot_name}.png"])
+                    img_file = _find_file(candidate_md, [img_name])
                     if img_file:
                         break
 
@@ -167,10 +187,10 @@ def parse_pipeline_artifacts(work_dir: Path) -> Tuple[Dict[str, Any], List[str]]
             if b64_str:
                 data["plots"][plot_name] = b64_str
             else:
-                warnings.append(f"Falha ao codificar a imagem '{plot_name}.png'.")
-        else:
+                warnings.append(f"Falha ao codificar a imagem '{img_name}'.")
+        elif plot_name not in ("decomp", "gyrate", "sasa"):
             warnings.append(
-                f"Gráfico de Dinâmica Molecular '{plot_name}.png' não encontrado."
+                f"Gráfico de Dinâmica Molecular '{img_name}' não encontrado."
             )
 
     return data, warnings
@@ -375,15 +395,30 @@ def generate_html_report(
             else '<span class="badge badge-success">Baixo Efluxo</span>'
         )
 
-        if toxic_alerts:
-            tox_badge = '<span class="badge badge-danger">ALERTA PAINS</span>'
-            tox_val = ", ".join(toxic_alerts)
+        fsp3 = admet.get("fsp3", 0.0)
+        fsp3_badge = '<span class="badge badge-success">Alto (3D Complexo)</span>' if fsp3 >= 0.42 else '<span class="badge badge-secondary">Moderado / Plano</span>'
+        qed = admet.get("qed_score", 0.0)
+        qed_cls = admet.get("qed_classification", "N/A")
+        qed_badge = '<span class="badge badge-success">Alto (Drug-like)</span>' if qed >= 0.67 else ('<span class="badge badge-primary">Moderado</span>' if qed >= 0.49 else '<span class="badge badge-warning">Baixo</span>')
+        sa = admet.get("synthetic_accessibility", 0.0)
+        sa_cls = admet.get("synthetic_accessibility_classification", "N/A")
+        sa_badge = '<span class="badge badge-success">Fácil Síntese</span>' if sa <= 3.5 else ('<span class="badge badge-primary">Moderada</span>' if sa <= 6.0 else '<span class="badge badge-danger">Alta Complexidade</span>')
+
+        lead_like = admet.get("lead_likeness_pass", False)
+        lead_badge = '<span class="badge badge-success">Conforme</span>' if lead_like else '<span class="badge badge-secondary">Não Enquadrado</span>'
+        golden = admet.get("golden_triangle_pass", False)
+        golden_badge = '<span class="badge badge-success">Conforme</span>' if golden else '<span class="badge badge-secondary">Fora do Triângulo</span>'
+
+        all_alerts = admet.get("all_structural_alerts", toxic_alerts)
+        if all_alerts:
+            tox_badge = '<span class="badge badge-danger">ALERTA ESTRUTURAL</span>'
+            tox_val = ", ".join(all_alerts)
         else:
-            tox_badge = '<span class="badge badge-success">Seguro</span>'
-            tox_val = "Nenhum alerta estrutural identificado"
+            tox_badge = '<span class="badge badge-success">Seguro (0 Alertas)</span>'
+            tox_val = "Nenhum alerta de PAINS, Brenk ou subestruturas reativas identificado"
 
         admet_rows_html = f"""
-        <tr class="section-header"><td colspan="4">1. Propriedades Físico-Químicas (Lipinski & Veber)</td></tr>
+        <tr class="section-header"><td colspan="4">1. Propriedades Físico-Químicas & Regras de Filtro (Lipinski & Veber)</td></tr>
         <tr><td>Peso Molecular (MW)</td><td class="text-mono">{mw:.2f} g/mol</td><td>&le; 500.00 Da</td><td>{mw_status}</td></tr>
         <tr><td>Lipofilicidade (LogP)</td><td class="text-mono">{logp:.2f}</td><td>&le; 5.00</td><td>{logp_status}</td></tr>
         <tr><td>Doadores de H (HBD)</td><td class="text-mono">{hbd}</td><td>&le; 5</td><td>{hbd_status}</td></tr>
@@ -391,13 +426,20 @@ def generate_html_report(
         <tr><td>Superfície Polar Topológica (TPSA)</td><td class="text-mono">{tpsa:.2f} &Aring;&sup2;</td><td>&le; 140.00 &Aring;&sup2;</td><td>{tpsa_status}</td></tr>
         <tr><td>Ligações Rotacionáveis (RotB)</td><td class="text-mono">{rotb}</td><td>&le; 10</td><td>{rotb_status}</td></tr>
 
-        <tr class="section-header"><td colspan="4">2. Farmacocinética e Biodisponibilidade (ADME)</td></tr>
+        <tr class="section-header"><td colspan="4">2. Quimioinformática & Medicinal Chemistry (Drug-likeness & Síntese)</td></tr>
+        <tr><td>Estimativa Quantitativa de Drug-likeness (QED)</td><td class="text-mono">{qed:.2f} ({qed_cls})</td><td>&ge; 0.67 (Bickerton et al.)</td><td>{qed_badge}</td></tr>
+        <tr><td>Fração de Carbonos sp3 (Fsp3)</td><td class="text-mono">{fsp3:.2f}</td><td>&ge; 0.42 (Complexidade 3D / Solubilidade)</td><td>{fsp3_badge}</td></tr>
+        <tr><td>Acessibilidade Sintética (SAscore)</td><td class="text-mono">{sa:.2f} ({sa_cls})</td><td>1.0 (Muito Fácil) a 10.0 (Muito Complexo)</td><td>{sa_badge}</td></tr>
+        <tr><td>Perfil Lead-like (Teague & Oprea)</td><td class="text-mono">{"Passou" if lead_like else "Desvio"}</td><td>MW 150-350 &bull; LogP -1 a 3.5 &bull; RotB &le; 7</td><td>{lead_badge}</td></tr>
+        <tr><td>Golden Triangle (Pfizer / Johnson & Zheng)</td><td class="text-mono">{"Passou" if golden else "Desvio"}</td><td>MW 200-400 &bull; LogP -1 a 3.0</td><td>{golden_badge}</td></tr>
+
+        <tr class="section-header"><td colspan="4">3. Farmacocinética e Biodisponibilidade (ADME)</td></tr>
         <tr><td>Absorção Intestinal Humana (HIA)</td><td class="text-mono">{hia_status}</td><td>Egan Egg (TPSA &le; 132 & -1.0 &le; LogP &le; 5.8)</td><td>{hia_badge}</td></tr>
         <tr><td>Permeabilidade Hematoencefálica (BBB)</td><td class="text-mono">{bbb_status}</td><td>Clark (Neutra, TPSA &lt; 90 & 1.0 &le; LogP &le; 5.0)</td><td>{bbb_badge}</td></tr>
         <tr><td>Substrato de P-glicoproteína (P-gp)</td><td class="text-mono">{pgp_status}</td><td>MW &gt; 400 & TPSA &gt; 80</td><td>{pgp_badge}</td></tr>
 
-        <tr class="section-header"><td colspan="4">3. Toxicologia e Alertas Estruturais (T)</td></tr>
-        <tr><td>Subestruturas Reativas / PAINS</td><td class="text-mono">{tox_val}</td><td>Filtro de Subestruturas Tóxicas</td><td>{tox_badge}</td></tr>
+        <tr class="section-header"><td colspan="4">4. Toxicologia e Alertas Estruturais (PAINS, Brenk & SMARTS)</td></tr>
+        <tr><td>Catálogo de Subestruturas Espúrias & Alertas</td><td class="text-mono">{tox_val}</td><td>Filtros RDKit PAINS A/B/C, Brenk & NIH</td><td>{tox_badge}</td></tr>
         """
     else:
         admet_rows_html = """<tr><td colspan="4" class="text-center text-muted">Nenhum dado ADMET disponível</td></tr>"""
@@ -435,9 +477,11 @@ def generate_html_report(
         interaction_rows_html = """<tr><td colspan="4" class="text-center text-muted">Nenhuma interação atômica mapeada no diretório.</td></tr>"""
 
     # Galeria de Imagens da DM
-    rmsd_img = data["plots"]["rmsd"]
-    rmsf_img = data["plots"]["rmsf"]
-    hbond_img = data["plots"]["hbond"]
+    rmsd_img = data["plots"].get("rmsd")
+    rmsf_img = data["plots"].get("rmsf")
+    hbond_img = data["plots"].get("hbond")
+    gyrate_img = data["plots"].get("gyrate")
+    sasa_img = data["plots"].get("sasa")
 
     def render_plot_card(
         title: str, subtitle: str, img_b64: Optional[str], fallback_desc: str
@@ -487,6 +531,121 @@ def generate_html_report(
         hbond_img,
         "Gráfico hbond.png não encontrado no diretório de trabalho.",
     )
+    gyrate_card = render_plot_card(
+        "Raio de Giro (Rg) - Compacidade e Enovelamento (0 - 100 ns)",
+        "Monitoramento da Compacidade Estrutural da Proteína ao Longo da Simulação",
+        gyrate_img,
+        "Gráfico gyrate.png não encontrado no diretório de trabalho.",
+    )
+    sasa_card = render_plot_card(
+        "SASA - Área Acessível ao Solvente (0 - 100 ns)",
+        "Estabilidade de Exposição ao Solvente e Integridade do Core Hidrofóbico",
+        sasa_img,
+        "Gráfico sasa.png não encontrado no diretório de trabalho.",
+    )
+
+    # Ocupação Temporal de Pontes de Hidrogênio (% Occupancy)
+    hbond_occ_data = data.get("hbond_occupancy", [])
+    hbond_occ_html = ""
+    if hbond_occ_data:
+        hbond_occ_rows = ""
+        for occ in hbond_occ_data[:12]:
+            d_pair = occ.get("donor", "UNK")
+            a_pair = occ.get("acceptor", "LIG")
+            pct = occ.get("occupancy_percent", 0.0)
+            cls_txt = occ.get("classification", "")
+            badge_cls = "badge-success" if pct >= 75.0 else ("badge-primary" if pct >= 35.0 else "badge-secondary")
+            hbond_occ_rows += f"""
+            <tr>
+                <td><strong>{d_pair}</strong> &rarr; {a_pair}</td>
+                <td class="text-mono font-bold">{pct:.1f}%</td>
+                <td><span class="badge {badge_cls}">{cls_txt}</span></td>
+            </tr>
+            """
+        hbond_occ_html = f"""
+        <div class="card mt-4">
+            <div class="card-header">
+                <h3>⏱️ Persistência Temporal de Pontes de Hidrogênio (0 - 100 ns)</h3>
+                <span class="badge badge-primary">% de Ocupação na DM</span>
+            </div>
+            <div class="card-body">
+                <p class="text-muted" style="font-size: 0.875rem; margin-bottom: 1rem;">
+                    Frequência de formação de pontes de hidrogênio ao longo dos 100 ns de trajetória para identificar âncoras farmacofóricas permanentes (&ge;75% de ocupação).
+                </p>
+                <div class="table-responsive">
+                    <table class="table">
+                        <thead>
+                            <tr>
+                                <th>Par Doador &rarr; Aceitador</th>
+                                <th>Ocupação na Trajetória (%)</th>
+                                <th>Classificação Farmacofórica</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {hbond_occ_rows}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+        """
+
+    # Decomposição de Energia Livre por Resíduo (MM-PBSA Hotspots)
+    decomp_img = data["plots"].get("decomp")
+    hotspots = mmpbsa_data.get("hotspot_residues", []) if mmpbsa_data else []
+    decomp_section_html = ""
+    if decomp_img or hotspots:
+        hotspot_rows = ""
+        for h in hotspots:
+            raw_res = h.get("residue", "").strip()
+            if raw_res.startswith("R:") or raw_res.startswith("L:"):
+                raw_res = raw_res[2:]
+            res_lbl = raw_res.replace(":", " ").strip()
+            tot = h.get("total", 0.0)
+            vdw_h = h.get("vdw", 0.0)
+            eel_h = h.get("electrostatic", 0.0)
+            hotspot_rows += f"""
+            <tr>
+                <td><strong>{res_lbl}</strong></td>
+                <td class="text-right text-mono">{vdw_h:.2f}</td>
+                <td class="text-right text-mono">{eel_h:.2f}</td>
+                <td class="text-right text-mono font-bold text-success">{tot:.2f} kcal/mol</td>
+                <td><span class="badge badge-success">Hotspot Estabilizador</span></td>
+            </tr>
+            """
+
+        decomp_plot_html = f"""
+        <div style="margin-top: 1.5rem; text-align: center;">
+            <h4 style="margin-bottom: 0.5rem; font-size: 1.05rem;">Perfil de Contribuição por Resíduo (&Delta;G<sub>bind</sub>)</h4>
+            <img src="{decomp_img}" alt="MM-PBSA Per-Residue Decomposition" class="img-responsive" style="max-height: 480px; margin: 0 auto; border-radius: var(--radius-md); box-shadow: var(--shadow-sm);" />
+        </div>
+        """ if decomp_img else ""
+
+        decomp_section_html = f"""
+        <div class="card-body" style="border-top: 1px solid var(--border-color); background: #fafafa;">
+            <h4 style="font-size: 1.1rem; color: var(--text-primary); margin-bottom: 0.75rem;">🎯 Decomposição por Resíduo (Hotspots Termodinâmicos de Ligação)</h4>
+            <p class="text-muted" style="font-size: 0.875rem; margin-bottom: 1rem;">
+                Resíduos do sítio ativo com maior contribuição de energia livre favorável (&Delta;G &lt; 0) para ancoramento do ligante.
+            </p>
+            <div class="table-responsive">
+                <table class="table">
+                    <thead>
+                        <tr>
+                            <th>Resíduo Chave</th>
+                            <th class="text-right">&Delta;E<sub>vdw</sub></th>
+                            <th class="text-right">&Delta;E<sub>elec</sub></th>
+                            <th class="text-right">&Delta;G Total</th>
+                            <th>Papel Termodinâmico</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {hotspot_rows if hotspot_rows else '<tr><td colspan="5" class="text-center text-muted">Dados de hotspots disponíveis no gráfico de decomposição</td></tr>'}
+                    </tbody>
+                </table>
+            </div>
+            {decomp_plot_html}
+        </div>
+        """
 
     # Tabela MM-PBSA detalhada
     mmpbsa_table_html = ""
@@ -566,6 +725,7 @@ def generate_html_report(
                     </table>
                 </div>
             </div>
+            {decomp_section_html}
         </section>
         """
 
@@ -1160,6 +1320,9 @@ def generate_html_report(
             </div>
         </section>
 
+        <!-- Seção 2.1: Ocupação e Persistência de Pontes de Hidrogênio (DM 0 - 100 ns) -->
+        {hbond_occ_html}
+
         <!-- Seção 3: Galeria de Dinâmica Molecular (GROMACS) -->
         <section class="card">
             <div class="card-header">
@@ -1171,12 +1334,75 @@ def generate_html_report(
                     {rmsd_card}
                     {rmsf_card}
                     {hbond_card}
+                    {gyrate_card}
+                    {sasa_card}
                 </div>
             </div>
         </section>
 
         <!-- Seção 4: Decomposição MM-PBSA (Se disponível) -->
         {mmpbsa_table_html}
+
+        <!-- Seção 5: Matrizes e Séries Temporais Exportadas em CSV para Publicação -->
+        <section class="card">
+            <div class="card-header">
+                <h3>💾 Matrizes e Séries Temporais Exportadas (CSV / Publicação)</h3>
+                <span class="badge badge-success">Pronto para GraphPad Prism / Origin / R</span>
+            </div>
+            <div class="card-body">
+                <p class="text-muted" style="font-size: 0.875rem; margin-bottom: 1rem;">
+                    Todos os dados quantitativos calculados durante o pipeline foram exportados no formato CSV para viabilizar a criação de gráficos customizados e tabelas para manuscritos científicos.
+                </p>
+                <div class="table-responsive">
+                    <table class="table">
+                        <thead>
+                            <tr>
+                                <th>Arquivo CSV</th>
+                                <th>Métrica / Conteúdo</th>
+                                <th>Colunas Exportadas</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td><code>rmsd.csv</code></td>
+                                <td>Série temporal do RMSD da proteína (Backbone) e do ligante no sítio ativo</td>
+                                <td class="text-mono">Time_ns, Protein_Backbone_RMSD_nm, Ligand_RMSD_nm</td>
+                            </tr>
+                            <tr>
+                                <td><code>rmsf.csv</code></td>
+                                <td>Flutuação residual atômica dos carbonos alfa (C-α)</td>
+                                <td class="text-mono">Residue_Number, Calpha_RMSF_nm</td>
+                            </tr>
+                            <tr>
+                                <td><code>hbond.csv</code></td>
+                                <td>Contagem temporal de pontes de hidrogênio intermoleculares</td>
+                                <td class="text-mono">Time_ns, HBond_Count</td>
+                            </tr>
+                            <tr>
+                                <td><code>gyrate.csv</code></td>
+                                <td>Evolução do Raio de Giro total e por eixos tensores (R<sub>x</sub>, R<sub>y</sub>, R<sub>z</sub>)</td>
+                                <td class="text-mono">Time_ns, Total_nm, 2D_Rg_x_nm, 2D_Rg_y_nm, 2D_Rg_z_nm</td>
+                            </tr>
+                            <tr>
+                                <td><code>sasa.csv</code></td>
+                                <td>Área de Superfície Acessível ao Solvente</td>
+                                <td class="text-mono">Time_ns, Total_SASA_nm2</td>
+                            </tr>
+                            <tr>
+                                <td><code>hbond_occupancy.csv</code></td>
+                                <td>Persistência percentual e identificação farmacofórica de H-Bonds</td>
+                                <td class="text-mono">Donor, Acceptor, Occupancy_Percent, Classification</td>
+                            </tr>
+                            <tr>
+                                <td><code>decomp_mmpbsa.csv</code></td>
+                                <td>Contribuições energéticas por resíduo (&Delta;G, VdW, Eletrostática)</td>
+                                <td class="text-mono">Residue, Van_der_Waals_kcal_mol, Electrostatic_kcal_mol, Total_DeltaG_kcal_mol</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
 
         <!-- Footer -->
         <footer>

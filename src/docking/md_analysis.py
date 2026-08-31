@@ -542,6 +542,10 @@ def analyze_trajectory(working_dir: Path):
         "md_fit.xtc",
         "-num",
         "hbond.xvg",
+        "-hbn",
+        "hbond.ndx",
+        "-logfile",
+        "hbond.log",
         "-tu",
         "ns",
     ]
@@ -551,12 +555,138 @@ def analyze_trajectory(working_dir: Path):
     else:
         hbond_input = "Protein\nLIG\n"
 
-    run_analysis_cmd(
-        cmd_hbond,
-        working_dir,
-        hbond_input,
-        "Pontes de hidrogênio (Proteína-Ligante)",
-    )
+    try:
+        run_analysis_cmd(
+            cmd_hbond,
+            working_dir,
+            hbond_input,
+            "Pontes de hidrogênio (Proteína-Ligante)",
+        )
+    except Exception:
+        # Fallback sem flags extras caso a versão do GROMACS restrinja parâmetros
+        cmd_hbond_fallback = [
+            gmx_bin,
+            "hbond",
+            "-s",
+            "md.tpr",
+            "-f",
+            "md_fit.xtc",
+            "-num",
+            "hbond.xvg",
+            "-tu",
+            "ns",
+        ]
+        if index_file.exists():
+            cmd_hbond_fallback.extend(["-n", "index.ndx"])
+        run_analysis_cmd(
+            cmd_hbond_fallback,
+            working_dir,
+            hbond_input,
+            "Pontes de hidrogênio (Proteína-Ligante)",
+        )
+
+    # 4. Raio de Giro (Rg - Compacidade e Estabilidade Global de Enovelamento)
+    cmd_gyrate = [
+        gmx_bin,
+        "gyrate",
+        "-s",
+        "md.tpr",
+        "-f",
+        "md_fit.xtc",
+        "-o",
+        "gyrate.xvg",
+    ]
+    try:
+        run_analysis_cmd(cmd_gyrate, working_dir, "1\n", "Raio de Giro (Rg - Proteína)")
+    except Exception:
+        pass
+
+    # 5. Área de Superfície Acessível ao Solvente (SASA)
+    cmd_sasa = [
+        gmx_bin,
+        "sasa",
+        "-s",
+        "md.tpr",
+        "-f",
+        "md_fit.xtc",
+        "-o",
+        "sasa.xvg",
+        "-tu",
+        "ns",
+    ]
+    try:
+        run_analysis_cmd(cmd_sasa, working_dir, "1\n", "Área de Superfície Acessível ao Solvente (SASA)")
+    except Exception:
+        pass
+
+    # 6. Quantificação de persistência temporal (% H-Bond Occupancy)
+    parse_hbond_occupancy(working_dir)
+
+    # 7. Agrupamento Conformacional GROMOS (gmx cluster) para extração da pose representativa
+    calculate_clusters(working_dir)
+
+    # 8. Exportação automatizada de todas as matrizes brutas em formato CSV para publicação
+    export_analysis_csv(working_dir)
+
+
+def parse_xvg_multicolumn(
+    file_path: Path,
+) -> Tuple[List[float], Dict[str, List[float]], Dict[str, str]]:
+    """
+    Faz o parse de arquivos .xvg multicolunas gerados pelo GROMACS (ex: gyrate.xvg, sasa.xvg).
+    Retorna (x_vals, y_series_dict, metadata_dict).
+    """
+    x_vals: List[float] = []
+    series_data: List[List[float]] = []
+    meta: Dict[str, str] = {}
+    legends: Dict[int, str] = {}
+
+    if not file_path.exists():
+        raise FileNotFoundError(f"Arquivo XVG não encontrado: {file_path}")
+
+    with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+        for line in f:
+            line_str = line.strip()
+            if not line_str:
+                continue
+            if line_str.startswith("@"):
+                line_clean = line_str[1:].strip()
+                if "xaxis" in line_clean and "label" in line_clean:
+                    parts = line_clean.split("label", 1)
+                    if len(parts) > 1:
+                        meta["xaxis_label"] = parts[1].strip().strip('"')
+                elif "yaxis" in line_clean and "label" in line_clean:
+                    parts = line_clean.split("label", 1)
+                    if len(parts) > 1:
+                        meta["yaxis_label"] = parts[1].strip().strip('"')
+                elif "legend" in line_clean:
+                    m = re.search(r's(\d+)\s+legend\s+"([^"]+)"', line_clean)
+                    if m:
+                        legends[int(m.group(1))] = m.group(2)
+                continue
+            if line_str.startswith("#"):
+                continue
+
+            parts = line_str.split()
+            if len(parts) >= 2:
+                try:
+                    x_val = float(parts[0])
+                    y_row = [float(p) for p in parts[1:]]
+                    x_vals.append(x_val)
+                    if not series_data:
+                        series_data = [[] for _ in range(len(y_row))]
+                    for s_idx, val in enumerate(y_row):
+                        if s_idx < len(series_data):
+                            series_data[s_idx].append(val)
+                except ValueError:
+                    continue
+
+    y_series_dict: Dict[str, List[float]] = {}
+    for s_idx, col_vals in enumerate(series_data):
+        label = legends.get(s_idx, f"Series_{s_idx + 1}")
+        y_series_dict[label] = col_vals
+
+    return x_vals, y_series_dict, meta
 
 
 def parse_xvg_with_meta(
@@ -861,12 +991,448 @@ def plot_md_results(working_dir: Path) -> Dict[str, Path]:
             plt.close(fig)
             generated_plots["hbond"] = out_hbond_png
 
+    # 4. Gráfico de Raio de Giro (Rg - Compacidade e Enovelamento)
+    gyrate_file = working_dir / "gyrate.xvg"
+    if gyrate_file.exists():
+        try:
+            x_time, y_dict, meta_gyrate = parse_xvg_multicolumn(gyrate_file)
+            if x_time and y_dict:
+                xaxis_lbl = meta_gyrate.get("xaxis_label", "").lower()
+                if "ps" in xaxis_lbl or (max(x_time) > 1000 and "ns" not in xaxis_lbl):
+                    x_time = [t / 1000.0 for t in x_time]
+
+                fig, ax = plt.subplots(figsize=(8.0, 4.5), dpi=300)
+                total_key = next((k for k in y_dict.keys() if "total" in k.lower() or "rg" in k.lower()), list(y_dict.keys())[0])
+                y_total = y_dict[total_key]
+                ax.plot(x_time, y_total, color="#457b9d", linewidth=1.4, alpha=0.85, label=f"Total Rg ({total_key})")
+
+                mean_rg = sum(y_total) / len(y_total)
+                ax.axhline(mean_rg, color="#1d3557", linestyle="--", alpha=0.7, label=f"Mean Rg: {mean_rg:.3f} nm")
+
+                ax.set_xlabel("Time (ns)", fontweight="bold")
+                ax.set_ylabel("Radius of Gyration (nm)", fontweight="bold")
+                ax.set_title("Protein Compactness & Folding Stability - Rg (0 - 100 ns)", fontweight="bold", pad=12)
+                ax.set_xlim(left=0, right=max(x_time) if x_time else 100.0)
+                ax.legend(loc="upper right", frameon=True, framealpha=0.9)
+
+                out_gyrate_png = working_dir / "gyrate.png"
+                fig.savefig(out_gyrate_png, dpi=300, bbox_inches="tight")
+                plt.close(fig)
+                generated_plots["gyrate"] = out_gyrate_png
+        except Exception:
+            pass
+
+    # 5. Gráfico de Área de Superfície Acessível ao Solvente (SASA)
+    sasa_file = working_dir / "sasa.xvg"
+    if sasa_file.exists():
+        try:
+            x_time, y_dict, meta_sasa = parse_xvg_multicolumn(sasa_file)
+            if x_time and y_dict:
+                xaxis_lbl = meta_sasa.get("xaxis_label", "").lower()
+                if "ps" in xaxis_lbl or (max(x_time) > 1000 and "ns" not in xaxis_lbl):
+                    x_time = [t / 1000.0 for t in x_time]
+
+                fig, ax = plt.subplots(figsize=(8.0, 4.5), dpi=300)
+                total_key = list(y_dict.keys())[0]
+                y_sasa = y_dict[total_key]
+                ax.plot(x_time, y_sasa, color="#2b9348", linewidth=1.4, alpha=0.85, label="Total SASA")
+
+                mean_sasa = sum(y_sasa) / len(y_sasa)
+                ax.axhline(mean_sasa, color="#007f5f", linestyle="--", alpha=0.7, label=f"Mean SASA: {mean_sasa:.2f} nm²")
+
+                ax.set_xlabel("Time (ns)", fontweight="bold")
+                ax.set_ylabel(r"SASA ($\mathrm{nm}^2$)", fontweight="bold")
+                ax.set_title("Solvent Accessible Surface Area - SASA (0 - 100 ns)", fontweight="bold", pad=12)
+                ax.set_xlim(left=0, right=max(x_time) if x_time else 100.0)
+                ax.legend(loc="upper right", frameon=True, framealpha=0.9)
+
+                out_sasa_png = working_dir / "sasa.png"
+                fig.savefig(out_sasa_png, dpi=300, bbox_inches="tight")
+                plt.close(fig)
+                generated_plots["sasa"] = out_sasa_png
+        except Exception:
+            pass
+
+    # 6. Gráfico de Decomposição MM-PBSA por Resíduo (Hotspots Energéticos) se disponível
+    decomp_dat_file = working_dir / "FINAL_DECOMP_MMPBSA.dat"
+    if decomp_dat_file.exists():
+        decomp_data = parse_mmpbsa_decomp(decomp_dat_file)
+        if decomp_data:
+            out_decomp_png = plot_mmpbsa_decomp(decomp_data, working_dir)
+            if out_decomp_png:
+                generated_plots["decomp"] = out_decomp_png
+
     if not generated_plots:
         raise FileNotFoundError(
             f"Nenhum arquivo de análise (.xvg) foi encontrado em {working_dir} para geração dos gráficos."
         )
 
     return generated_plots
+
+
+def calculate_clusters(working_dir: Path, cutoff: float = 0.15) -> Optional[Path]:
+    """
+    Executa o agrupamento conformacional da trajetória via algoritmo GROMOS no GROMACS (gmx cluster).
+    Gera a estrutura medóide mais representativa do estado estacionário (cluster_medoid.gro).
+    """
+    working_dir = Path(working_dir)
+    tpr_file = working_dir / "md.tpr"
+    fit_xtc = working_dir / "md_fit.xtc"
+    if not tpr_file.exists() or not fit_xtc.exists():
+        return None
+
+    gmx_bin = find_executable("gmx")
+    if not gmx_bin:
+        return None
+
+    cmd_cluster = [
+        gmx_bin,
+        "cluster",
+        "-s",
+        "md.tpr",
+        "-f",
+        "md_fit.xtc",
+        "-method",
+        "gromos",
+        "-cutoff",
+        str(cutoff),
+        "-cl",
+        "cluster_medoid.gro",
+        "-g",
+        "cluster.log",
+        "-dist",
+        "clust-dist.xvg",
+    ]
+
+    try:
+        env = os.environ.copy()
+        exec_dir = str(Path(gmx_bin).parent)
+        env["PATH"] = f"{exec_dir}{os.pathsep}{env.get('PATH', '')}"
+
+        # Entrada para seleção de grupos: 1 (Protein fit) e 1 (Protein cluster)
+        subprocess.run(
+            cmd_cluster,
+            cwd=str(working_dir),
+            env=env,
+            capture_output=True,
+            text=True,
+            input="1\n1\n",
+        )
+        medoid_path = working_dir / "cluster_medoid.gro"
+        if medoid_path.exists():
+            return medoid_path
+    except Exception:
+        pass
+
+    return None
+
+
+def parse_hbond_occupancy(working_dir: Path, total_frames: int = 1000) -> List[Dict[str, Any]]:
+    """
+    Faz o parsing das pontes de hidrogênio geradas pelo GROMACS (hbond.log / hbond.ndx)
+    para quantificar a persistência temporal e ocupação percentual por par de resíduos.
+    Salva os resultados estruturados em 'hbond_occupancy.json'.
+    """
+    working_dir = Path(working_dir)
+    log_file = working_dir / "hbond.log"
+    occupancy_list: List[Dict[str, Any]] = []
+
+    if log_file.exists():
+        try:
+            with open(log_file, "r", encoding="utf-8", errors="ignore") as f:
+                lines = f.readlines()
+
+            for line in lines:
+                line_str = line.strip()
+                if "%" in line_str and ("-" in line_str or "atom" in line_str.lower() or "res" in line_str.lower() or "side" in line_str.lower() or "main" in line_str.lower()):
+                    parts = line_str.split()
+                    pct_str = [p for p in parts if "%" in p]
+                    if pct_str:
+                        try:
+                            pct_val = float(pct_str[0].replace("%", "").replace(",", "."))
+                            donor = parts[0] if len(parts) > 0 else "UNK"
+                            acceptor = parts[1] if len(parts) > 1 else "LIG"
+                            occupancy_list.append({
+                                "donor": donor,
+                                "acceptor": acceptor,
+                                "occupancy_percent": round(pct_val, 2),
+                                "classification": "Permanente / Âncora Farmacofórica" if pct_val >= 75.0 else ("Moderada" if pct_val >= 35.0 else "Transitória")
+                            })
+                        except ValueError:
+                            continue
+        except Exception:
+            pass
+
+    json_path = working_dir / "hbond_occupancy.json"
+    if occupancy_list:
+        occupancy_list.sort(key=lambda x: x["occupancy_percent"], reverse=True)
+        with open(json_path, "w", encoding="utf-8") as f:
+            json.dump(occupancy_list, f, indent=2, ensure_ascii=False)
+
+    return occupancy_list
+
+
+def parse_mmpbsa_decomp(decomp_path: Path) -> List[Dict[str, Any]]:
+    """
+    Parse estruturado do arquivo de decomposição por resíduo (FINAL_DECOMP_MMPBSA.dat).
+    Extrai as contribuições energéticas individuais por resíduo (Van der Waals, Eletrostática, Polar, Apolar e Total).
+    Retorna uma lista ordenada pela energia total (mais favoráveis / estabilizadoras primeiro).
+    """
+    if not decomp_path.exists():
+        return []
+
+    residues_data: List[Dict[str, Any]] = []
+
+    with open(decomp_path, "r", encoding="utf-8", errors="ignore") as f:
+        lines = f.readlines()
+
+    in_decomp = False
+    for line in lines:
+        line_clean = line.strip()
+        if not line_clean or line_clean.startswith("#") or line_clean.startswith("---"):
+            continue
+
+        if "Energy Decomposition" in line_clean or "Residue |" in line_clean or "TDC" in line_clean or "DELTAS:" in line_clean:
+            in_decomp = True
+            continue
+
+        if in_decomp:
+            if "Residue" in line_clean or "===" in line_clean or "Location" in line_clean:
+                continue
+
+            if "|" in line_clean:
+                cols = [c.strip() for c in line_clean.split("|")]
+                if len(cols) >= 4:
+                    res_raw = cols[0]
+                    try:
+                        total_col = cols[-1]
+                        total_parts = total_col.replace("±", "+/-").split("+/-")
+                        total_mean = float(total_parts[0].strip())
+                        total_std = float(total_parts[1].strip()) if len(total_parts) > 1 else 0.0
+
+                        vdw_mean = 0.0
+                        if len(cols) > 2:
+                            vdw_parts = cols[2].replace("±", "+/-").split("+/-")
+                            try:
+                                vdw_mean = float(vdw_parts[0].strip())
+                            except ValueError:
+                                vdw_mean = 0.0
+
+                        eel_mean = 0.0
+                        if len(cols) > 3:
+                            eel_parts = cols[3].replace("±", "+/-").split("+/-")
+                            try:
+                                eel_mean = float(eel_parts[0].strip())
+                            except ValueError:
+                                eel_mean = 0.0
+
+                        residues_data.append({
+                            "residue": res_raw,
+                            "vdw": round(vdw_mean, 3),
+                            "electrostatic": round(eel_mean, 3),
+                            "total": round(total_mean, 3),
+                            "std": round(total_std, 3)
+                        })
+                    except ValueError:
+                        continue
+            else:
+                parts = line_clean.split()
+                if len(parts) >= 2:
+                    res_raw = parts[0]
+                    try:
+                        total_mean = float(parts[-1])
+                        residues_data.append({
+                            "residue": res_raw,
+                            "vdw": 0.0,
+                            "electrostatic": 0.0,
+                            "total": round(total_mean, 3),
+                            "std": 0.0
+                        })
+                    except ValueError:
+                        continue
+
+    # Ordena os resíduos: mais estabilizadores primeiro (delta G mais negativo)
+    residues_data.sort(key=lambda x: x["total"])
+    return residues_data
+
+
+def plot_mmpbsa_decomp(decomp_data: List[Dict[str, Any]], working_dir: Path) -> Optional[Path]:
+    """
+    Gera gráfico de barras de publicação (decomp_mmpbsa.png a 300 DPI) destacando os resíduos chave (hotspots)
+    que mais contribuem para a energia livre de ligação MM-PBSA.
+    """
+    if not decomp_data:
+        return None
+
+    # Filtra os resíduos mais estabilizadores (< 0) e principais desestabilizadores (> 0.5 kcal/mol)
+    stabilizing = [r for r in decomp_data if r["total"] < 0][:15]
+    destabilizing = [r for r in decomp_data if r["total"] > 0.3][:5]
+    plot_items = stabilizing + destabilizing
+    if not plot_items:
+        plot_items = decomp_data[:15]
+
+    plot_items.sort(key=lambda x: x["total"])
+
+    labels = []
+    for r in plot_items:
+        raw_res = r.get("residue", "").strip()
+        if raw_res.startswith("R:") or raw_res.startswith("L:"):
+            raw_res = raw_res[2:]
+        labels.append(raw_res.replace(":", " ").strip())
+    totals = [r["total"] for r in plot_items]
+    stds = [r.get("std", 0.0) for r in plot_items]
+    colors = ["#2a9d8f" if v < 0 else "#e76f51" for v in totals]
+
+    fig, ax = plt.subplots(figsize=(8.5, max(4.5, len(labels) * 0.32)), dpi=300)
+    y_pos = list(range(len(labels)))
+    has_errors = any(s > 0 for s in stds)
+    bars = ax.barh(y_pos, totals, xerr=stds if has_errors else None, color=colors, alpha=0.88, edgecolor="black", linewidth=0.6, capsize=3)
+
+    ax.set_yticks(y_pos)
+    ax.set_yticklabels(labels, fontweight="bold")
+    ax.axvline(0, color="gray", linestyle="--", linewidth=0.9, alpha=0.7)
+    ax.set_xlabel(r"Per-Residue $\Delta G_{\mathrm{bind}}$ Contribution (kcal/mol)", fontweight="bold")
+    ax.set_title("MM-PBSA Per-Residue Free Energy Decomposition (Hotspot Residues)", fontweight="bold", pad=12)
+
+    for idx, bar in enumerate(bars):
+        val = totals[idx]
+        offset = 0.12 if val >= 0 else -0.12
+        ha = "left" if val >= 0 else "right"
+        ax.text(val + offset, bar.get_y() + bar.get_height() / 2, f"{val:.2f}", va="center", ha=ha, fontsize=8.5, fontweight="bold")
+
+    out_png = working_dir / "decomp_mmpbsa.png"
+    fig.savefig(out_png, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+    return out_png
+
+
+def export_analysis_csv(working_dir: Path) -> Dict[str, Path]:
+    """
+    Exporta todas as séries temporais e dados calculados de DM para matrizes CSV limpas
+    prontas para publicação e importação em softwares científicos (Origin, GraphPad Prism, R, Python).
+    """
+    working_dir = Path(working_dir)
+    exported_csvs: Dict[str, Path] = {}
+
+    # 1. RMSD (Backbone e Ligante)
+    rmsd_file = working_dir / "rmsd.xvg"
+    rmsd_lig_file = working_dir / "rmsd_lig.xvg"
+    if rmsd_file.exists():
+        x_time, y_prot, meta = parse_xvg_with_meta(rmsd_file)
+        if "ps" in meta.get("xaxis_label", "").lower() or (x_time and max(x_time) > 1000 and "ns" not in meta.get("xaxis_label", "").lower()):
+            x_time = [t / 1000.0 for t in x_time]
+
+        y_lig_map = {}
+        if rmsd_lig_file.exists():
+            x_l, y_l, meta_l = parse_xvg_with_meta(rmsd_lig_file)
+            if "ps" in meta_l.get("xaxis_label", "").lower() or (x_l and max(x_l) > 1000 and "ns" not in meta_l.get("xaxis_label", "").lower()):
+                x_l = [t / 1000.0 for t in x_l]
+            for xl, yl in zip(x_l, y_l):
+                y_lig_map[round(xl, 3)] = yl
+
+        rmsd_csv_path = working_dir / "rmsd.csv"
+        with open(rmsd_csv_path, "w", encoding="utf-8") as f:
+            f.write("Time_ns,Protein_Backbone_RMSD_nm,Ligand_RMSD_nm\n")
+            for xt, yp in zip(x_time, y_prot):
+                yl = y_lig_map.get(round(xt, 3), "")
+                f.write(f"{xt:.3f},{yp:.4f},{yl if yl != '' else ''}\n")
+        exported_csvs["rmsd"] = rmsd_csv_path
+
+    # 2. RMSF
+    rmsf_file = working_dir / "rmsf.xvg"
+    if rmsf_file.exists():
+        x_res, y_rmsf, _ = parse_xvg_with_meta(rmsf_file)
+        rmsf_csv_path = working_dir / "rmsf.csv"
+        with open(rmsf_csv_path, "w", encoding="utf-8") as f:
+            f.write("Residue_Number,Calpha_RMSF_nm\n")
+            for xr, yr in zip(x_res, y_rmsf):
+                f.write(f"{int(xr)},{yr:.4f}\n")
+        exported_csvs["rmsf"] = rmsf_csv_path
+
+    # 3. HBond
+    hbond_file = working_dir / "hbond.xvg"
+    if hbond_file.exists():
+        x_time, y_hb, meta = parse_xvg_with_meta(hbond_file)
+        if "ps" in meta.get("xaxis_label", "").lower() or (x_time and max(x_time) > 1000 and "ns" not in meta.get("xaxis_label", "").lower()):
+            x_time = [t / 1000.0 for t in x_time]
+        hbond_csv_path = working_dir / "hbond.csv"
+        with open(hbond_csv_path, "w", encoding="utf-8") as f:
+            f.write("Time_ns,HBond_Count\n")
+            for xt, yb in zip(x_time, y_hb):
+                f.write(f"{xt:.3f},{int(yb)}\n")
+        exported_csvs["hbond"] = hbond_csv_path
+
+    # 4. Raio de Giro (gyrate.xvg)
+    gyrate_file = working_dir / "gyrate.xvg"
+    if gyrate_file.exists():
+        try:
+            x_time, y_dict, meta = parse_xvg_multicolumn(gyrate_file)
+            if "ps" in meta.get("xaxis_label", "").lower() or (x_time and max(x_time) > 1000 and "ns" not in meta.get("xaxis_label", "").lower()):
+                x_time = [t / 1000.0 for t in x_time]
+            headers = ["Time_ns"] + [k.replace(" ", "_") + "_nm" for k in y_dict.keys()]
+            gyrate_csv_path = working_dir / "gyrate.csv"
+            with open(gyrate_csv_path, "w", encoding="utf-8") as f:
+                f.write(",".join(headers) + "\n")
+                keys = list(y_dict.keys())
+                for idx, xt in enumerate(x_time):
+                    row_vals = [f"{xt:.3f}"] + [f"{y_dict[k][idx]:.4f}" if idx < len(y_dict[k]) else "" for k in keys]
+                    f.write(",".join(row_vals) + "\n")
+            exported_csvs["gyrate"] = gyrate_csv_path
+        except Exception:
+            pass
+
+    # 5. SASA (sasa.xvg)
+    sasa_file = working_dir / "sasa.xvg"
+    if sasa_file.exists():
+        try:
+            x_time, y_dict, meta = parse_xvg_multicolumn(sasa_file)
+            if "ps" in meta.get("xaxis_label", "").lower() or (x_time and max(x_time) > 1000 and "ns" not in meta.get("xaxis_label", "").lower()):
+                x_time = [t / 1000.0 for t in x_time]
+            headers = ["Time_ns"] + [k.replace(" ", "_") + "_nm2" for k in y_dict.keys()]
+            sasa_csv_path = working_dir / "sasa.csv"
+            with open(sasa_csv_path, "w", encoding="utf-8") as f:
+                f.write(",".join(headers) + "\n")
+                keys = list(y_dict.keys())
+                for idx, xt in enumerate(x_time):
+                    row_vals = [f"{xt:.3f}"] + [f"{y_dict[k][idx]:.4f}" if idx < len(y_dict[k]) else "" for k in keys]
+                    f.write(",".join(row_vals) + "\n")
+            exported_csvs["sasa"] = sasa_csv_path
+        except Exception:
+            pass
+
+    # 6. Decomposição MM-PBSA
+    decomp_file = working_dir / "FINAL_DECOMP_MMPBSA.dat"
+    if decomp_file.exists():
+        decomp_data = parse_mmpbsa_decomp(decomp_file)
+        if decomp_data:
+            decomp_csv_path = working_dir / "decomp_mmpbsa.csv"
+            with open(decomp_csv_path, "w", encoding="utf-8") as f:
+                f.write("Residue,Van_der_Waals_kcal_mol,Electrostatic_kcal_mol,Total_DeltaG_kcal_mol,Std_kcal_mol\n")
+                for d in decomp_data:
+                    raw_res = d.get("residue", "").strip()
+                    if raw_res.startswith("R:") or raw_res.startswith("L:"):
+                        raw_res = raw_res[2:]
+                    res_clean = raw_res.replace(":", " ").strip()
+                    f.write(f'"{res_clean}",{d.get("vdw", 0.0):.3f},{d.get("electrostatic", 0.0):.3f},{d.get("total", 0.0):.3f},{d.get("std", 0.0):.3f}\n')
+            exported_csvs["decomp"] = decomp_csv_path
+
+    # 7. Ocupação de Pontes de Hidrogênio
+    hbond_occ_file = working_dir / "hbond_occupancy.json"
+    if hbond_occ_file.exists():
+        try:
+            with open(hbond_occ_file, "r", encoding="utf-8") as f:
+                occ_data = json.load(f)
+            if occ_data:
+                occ_csv_path = working_dir / "hbond_occupancy.csv"
+                with open(occ_csv_path, "w", encoding="utf-8") as f:
+                    f.write("Donor,Acceptor,Occupancy_Percent,Classification\n")
+                    for row in occ_data:
+                        f.write(f'"{row.get("donor", "")}","{row.get("acceptor", "")}",{row.get("occupancy_percent", 0.0):.2f},"{row.get("classification", "")}"\n')
+                exported_csvs["hbond_occupancy"] = occ_csv_path
+        except Exception:
+            pass
+
+    return exported_csvs
 
 
 def parse_mmpbsa_dat(dat_path: Path) -> Dict[str, Any]:
@@ -1104,6 +1670,11 @@ istrng=0.150,
 fillratio=4.0,
 radiopt=1,
 /
+&decomp
+idecomp=2,
+dec_verbose=1,
+print_res="within 6.0",
+/
 """
     with open(mmpbsa_in_path, "w", encoding="utf-8") as f:
         f.write(mmpbsa_in_content)
@@ -1130,6 +1701,8 @@ radiopt=1,
         str(lig_idx),
         "-o",
         "FINAL_RESULTS_MMPBSA.dat",
+        "-do",
+        "FINAL_DECOMP_MMPBSA.dat",
         "-eo",
         "FINAL_RESULTS_MMPBSA.csv",
     ]
@@ -1172,7 +1745,7 @@ radiopt=1,
             f"Falha ao executar o cálculo MM-PBSA via gmx_MMPBSA: {e}"
         )
 
-    # 5. Parse dos resultados e geração de mmpbsa_summary.json
+    # 5. Parse dos resultados globais e decomposição por resíduo
     dat_output = working_dir / "FINAL_RESULTS_MMPBSA.dat"
     summary_data = parse_mmpbsa_dat(dat_output)
     summary_data["thermodynamic_window"] = "60 - 100 ns (Últimos 40% - Estado Estacionário)"
@@ -1183,6 +1756,17 @@ radiopt=1,
     summary_data["frames_analyzed"] = max(1, (endframe - startframe + 1) // interval)
     summary_data["protocol"] = "Dupla Escala Temporal (MM-PBSA 60-100 ns / Trajetória 0-100 ns)"
     summary_data["raw_output_file"] = "FINAL_RESULTS_MMPBSA.dat"
+
+    # Processa decomposição por resíduo se FINAL_DECOMP_MMPBSA.dat tiver sido gerado
+    decomp_dat_output = working_dir / "FINAL_DECOMP_MMPBSA.dat"
+    decomp_data = parse_mmpbsa_decomp(decomp_dat_output)
+    if not decomp_data and dat_output.exists():
+        decomp_data = parse_mmpbsa_decomp(dat_output)
+
+    if decomp_data:
+        summary_data["per_residue_decomposition"] = decomp_data
+        summary_data["hotspot_residues"] = [r for r in decomp_data if r["total"] < 0][:10]
+        plot_mmpbsa_decomp(decomp_data, working_dir)
 
     summary_json_path = working_dir / "mmpbsa_summary.json"
     with open(summary_json_path, "w", encoding="utf-8") as f:

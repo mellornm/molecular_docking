@@ -141,30 +141,44 @@ def archive_experiment(exp_name: str = None) -> Path:
     copy_file(md_dir / "md.log", dest_dirs["trajectory"], "GMX-Log")
     copy_file(md_dir / "md.cpt", dest_dirs["trajectory"], "Checkpoint")
 
-    # Arquiva a trajetória bruta original (md.xtc) e a estrutura estática limpa (md_clean.gro)
+    # Arquiva a trajetória bruta original (md.xtc) e coordenadas de referência/equilíbrio
     copy_file(md_dir / "md.xtc", dest_dirs["trajectory"], "Traj-Raw")
     copy_file(md_dir / "md_clean.gro", dest_dirs["trajectory"], "Structure-Clean")
+    copy_file(md_dir / "cluster_medoid.gro", dest_dirs["trajectory"], "Cluster-Medoid")
 
-    # 4. Relatórios Executivos, Gráficos e Resultados MM-PBSA
+    # 4. Relatórios Executivos, Gráficos, Matrizes CSV e Resultados MM-PBSA
     print("\n" + "━" * 68)
-    print("4. Arquivando Relatórios, Gráficos e Termodinâmica MM-PBSA...")
+    print("4. Arquivando Relatórios, Gráficos, Matrizes CSV e Termodinâmica...")
     print("━" * 68)
     analysis_files = (
         [
             md_dir / "report.html",
             md_dir / "show_complex.pml",
             md_dir / "FINAL_RESULTS_MMPBSA.dat",
+            md_dir / "FINAL_DECOMP_MMPBSA.dat",
             md_dir / "FINAL_RESULTS_MMPBSA.csv",
             md_dir / "RESULTS_gmx_MMPBSA.h5",
             md_dir / "mmpbsa_summary.json",
+            md_dir / "hbond_occupancy.json",
             md_dir / "mmpbsa.in",
             md_dir / "gmx_MMPBSA.log",
+            md_dir / "cluster.log",
         ]
         + sorted(md_dir.glob("*.png"))
         + sorted(md_dir.glob("*.xvg"))
+        + sorted(md_dir.glob("*.csv"))
+        + sorted(md_dir.glob("*.json"))
     )
 
+    # Elimina duplicatas mantendo a ordem
+    seen_paths = set()
+    unique_analysis_files = []
     for f in analysis_files:
+        if f not in seen_paths:
+            seen_paths.add(f)
+            unique_analysis_files.append(f)
+
+    for f in unique_analysis_files:
         copy_file(f, dest_dirs["report"], "Report/Data")
 
     # Relatórios adicionais em screening/ se houver

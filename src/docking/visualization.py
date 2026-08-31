@@ -98,6 +98,19 @@ def generate_pymol_script(work_dir: Path) -> Path:
                     fit_xtc_file = candidate_md / "md_fit.xtc"
                     break
 
+    # Verifica se a estrutura medóide mais representativa do cluster está presente
+    medoid_file = work_dir / "cluster_medoid.gro"
+    if not medoid_file.exists():
+        matches_medoid = list(work_dir.glob("*/cluster_medoid.gro"))
+        if matches_medoid:
+            medoid_file = matches_medoid[0]
+        else:
+            for parent in [work_dir] + list(work_dir.parents):
+                candidate_md = parent / "md_files"
+                if candidate_md.exists() and (candidate_md / "cluster_medoid.gro").exists():
+                    medoid_file = candidate_md / "cluster_medoid.gro"
+                    break
+
     try:
         struct_rel = str(struct_file.resolve().relative_to(work_dir.resolve())).replace("\\", "/")
     except ValueError:
@@ -108,7 +121,7 @@ def generate_pymol_script(work_dir: Path) -> Path:
         "# ==============================================================================",
         "# PyMOL Automated Visualization Script",
         "# Generated automatically by Molecular Docking Pipeline",
-        "# Structure: md_clean.gro / Trajectory: md_fit.xtc",
+        "# Structure: md_clean.gro / Trajectory: md_fit.xtc / Cluster: cluster_medoid.gro",
         "# ==============================================================================",
         "",
         "# 1. Inicialização e Configurações de Fundo e Renderização",
@@ -138,18 +151,42 @@ def generate_pymol_script(work_dir: Path) -> Path:
             ]
         )
 
+    if medoid_file and medoid_file.exists():
+        try:
+            medoid_rel = str(medoid_file.resolve().relative_to(work_dir.resolve())).replace("\\", "/")
+        except ValueError:
+            medoid_rel = str(medoid_file.name)
+        pml_lines.extend(
+            [
+                "",
+                "# 2.2 Estrutura Representativa do Cluster de Equilíbrio (GROMOS Medoid)",
+                f"load {medoid_rel}, rep_cluster",
+                "remove (rep_cluster and (resn SOL or resn HOH or resn NA or resn CL or resn TIP3 or resn ION))",
+                "hide everything, rep_cluster",
+                "show cartoon, rep_cluster and polymer",
+                "color warmpink, rep_cluster and polymer",
+                "set cartoon_transparency, 0.45, rep_cluster and polymer",
+                "select rep_ligand, rep_cluster and (resn LIG or resn UNK or resn UNL or resn MOL or resn ligand_md or (not polymer and not solvent))",
+                "show sticks, rep_ligand",
+                "color orange, rep_ligand",
+                "util.cnc rep_ligand",
+                "set stick_radius, 0.22, rep_ligand",
+                "disable rep_cluster  # Disponível para alternar visibilidade (overlay)",
+            ]
+        )
+
     pml_lines.extend(
         [
             "",
             "# 3. Limpeza de Solvente e Representação da Proteína (Cartoon)",
             "remove resn SOL or resn HOH or resn TIP3 or resn NA or resn CL or resn ION",
-            "hide everything, all",
-            "show cartoon, polymer",
-            "color cyan, polymer",
-            "set cartoon_transparency, 0.15, polymer",
+            "hide everything, complex",
+            "show cartoon, complex and polymer",
+            "color cyan, complex and polymer",
+            "set cartoon_transparency, 0.15, complex and polymer",
             "",
             "# 4. Representação do Ligante (Sticks)",
-            "select ligand, (resn LIG or resn UNK or resn UNL or resn MOL or resn ligand_md or (not polymer and not solvent))",
+            "select ligand, complex and (resn LIG or resn UNK or resn UNL or resn MOL or resn ligand_md or (not polymer and not solvent))",
             "show sticks, ligand",
             "color magenta, ligand",
             "util.cnc ligand",
