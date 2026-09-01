@@ -123,10 +123,13 @@ def run_plip_docker(complex_pdb: Path, output_dir: Path):
     complex_pdb = complex_pdb.resolve()
     output_dir = output_dir.resolve()
 
-    # Remove relatório pré-existente para evitar leitura de dados desatualizados
-    xml_path = output_dir / "report.xml"
-    if xml_path.exists():
-        xml_path.unlink()
+    # Remove relatórios pré-existentes para evitar leitura de dados desatualizados
+    for old_xml in list(output_dir.glob("*report.xml")) + [output_dir / "report.xml"]:
+        if old_xml.exists():
+            try:
+                old_xml.unlink()
+            except Exception:
+                pass
 
     # Garante que o complexo esteja dentro do volume que será montado
     if complex_pdb.parent != output_dir:
@@ -151,6 +154,18 @@ def run_plip_docker(complex_pdb: Path, output_dir: Path):
     try:
         # Executa de forma síncrona capturando logs de erro se houver falhas
         result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+
+        # Padroniza saída: se o PLIP gerou <stem>_report.xml, cria espelho report.xml
+        xml_out = output_dir / "report.xml"
+        if not xml_out.exists():
+            stem_xml = output_dir / f"{complex_pdb.stem}_report.xml"
+            if stem_xml.exists():
+                shutil.copy2(stem_xml, xml_out)
+            else:
+                any_xmls = list(output_dir.glob("*_report.xml"))
+                if any_xmls:
+                    shutil.copy2(any_xmls[0], xml_out)
+
         return True, result.stdout
     except subprocess.CalledProcessError as e:
         error_msg = f"Falha na execução do PLIP via Docker. Código: {e.returncode}.\nStdout: {e.stdout}\nStderr: {e.stderr}"
@@ -165,10 +180,18 @@ def parse_plip_xml(xml_path: Path):
     Extrai as pontes de hidrogênio e contatos hidrofóbicos detectados.
     """
     interactions = {"hydrogen_bonds": [], "hydrophobic_contacts": []}
+    xml_path = Path(xml_path)
 
     if not xml_path.exists():
-        print(f"[DEBUG] Arquivo XML não localizado em: {xml_path}")
-        return interactions
+        # Tenta buscar qualquer *_report.xml na mesma pasta
+        candidates = list(xml_path.parent.glob("*_report.xml")) + list(
+            xml_path.parent.glob("*report*.xml")
+        )
+        if candidates:
+            xml_path = candidates[0]
+        else:
+            print(f"[DEBUG] Arquivo XML não localizado em: {xml_path}")
+            return interactions
 
     print(f"[DEBUG] Arquivo XML localizado com sucesso: {xml_path}")
 

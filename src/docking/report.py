@@ -81,6 +81,14 @@ def parse_pipeline_artifacts(work_dir: Path) -> Tuple[Dict[str, Any], List[str]]
         possible_logs = list(work_dir.glob("*vina*.log")) + list(work_dir.glob("*.log"))
         if possible_logs:
             log_file = possible_logs[0]
+        else:
+            # Busca em pastas irmãs de screening ou no workspace data/
+            for parent in [work_dir] + list(work_dir.parents):
+                scr_dir = parent / "screening"
+                if scr_dir.exists():
+                    log_file = _find_file(scr_dir, vina_log_files)
+                    if log_file:
+                        break
 
     if log_file and log_file.exists():
         data["vina_log_path"] = str(log_file.name)
@@ -117,6 +125,32 @@ def parse_pipeline_artifacts(work_dir: Path) -> Tuple[Dict[str, Any], List[str]]
                     data["admet"] = inter_json["pharmacokinetics"]
         except Exception as e:
             warnings.append(f"Erro ao processar 'interactions.json': {e}")
+
+    # Fallback automático: se interactions.json não tinha contatos, tenta carregar direto do XML do PLIP
+    if (
+        not data["interactions"]["hydrogen_bonds"]
+        and not data["interactions"]["hydrophobic_contacts"]
+    ):
+        xml_candidates = list(work_dir.glob("*report*.xml")) + [work_dir / "report.xml"]
+        for xml_c in xml_candidates:
+            if xml_c.exists():
+                try:
+                    from docking.analysis import parse_plip_xml
+
+                    parsed_inter = parse_plip_xml(xml_c)
+                    data["interactions"]["hydrogen_bonds"] = parsed_inter.get(
+                        "hydrogen_bonds", []
+                    )
+                    data["interactions"]["hydrophobic_contacts"] = parsed_inter.get(
+                        "hydrophobic_contacts", []
+                    )
+                    if (
+                        data["interactions"]["hydrogen_bonds"]
+                        or data["interactions"]["hydrophobic_contacts"]
+                    ):
+                        break
+                except Exception:
+                    pass
 
     # 2.1 Parse de Ocupação Temporal de Pontes de Hidrogênio (hbond_occupancy.json)
     hbond_occ_file = _find_file(work_dir, ["hbond_occupancy.json"])
@@ -405,7 +439,15 @@ def generate_html_report(
         qed_badge = '<span class="badge badge-success">Alto (Drug-like)</span>' if qed >= 0.67 else ('<span class="badge badge-primary">Moderado</span>' if qed >= 0.49 else '<span class="badge badge-warning">Baixo</span>')
         sa = admet.get("synthetic_accessibility", 0.0)
         sa_cls = admet.get("synthetic_accessibility_classification", "N/A")
-        sa_badge = '<span class="badge badge-success">Fácil Síntese</span>' if sa <= 3.5 else ('<span class="badge badge-primary">Moderada</span>' if sa <= 6.0 else '<span class="badge badge-danger">Alta Complexidade</span>')
+        n_chiral = admet.get("chiral_centers", 0)
+        if sa <= 3.5:
+            sa_badge = '<span class="badge badge-success">Fácil Síntese</span>'
+        elif sa <= 6.0:
+            sa_badge = '<span class="badge badge-primary">Moderada</span>'
+        elif n_chiral >= 4 or "Natural" in str(sa_cls) or "Esteroid" in str(sa_cls):
+            sa_badge = '<span class="badge badge-secondary">Produto Natural / Esteroidal</span>'
+        else:
+            sa_badge = '<span class="badge badge-warning">Alta Complexidade</span>'
 
         lead_like = admet.get("lead_likeness_pass", False)
         lead_badge = '<span class="badge badge-success">Conforme</span>' if lead_like else '<span class="badge badge-secondary">Não Enquadrado</span>'

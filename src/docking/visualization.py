@@ -1,4 +1,7 @@
 import json
+import os
+import shutil
+import subprocess
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
@@ -36,18 +39,20 @@ def generate_pymol_script(work_dir: Path) -> Path:
     """
     Gera um script automatizado do PyMOL (show_complex.pml) no diretório de trabalho,
     configurando representação visual científica de alta fidelidade:
-    - Carregamento de md_clean.gro (ou complex.pdb) e da trajetória ajustada md_fit.xtc
+    - Suporte a execução independente de caminho (os.chdir embutido via Python API do PyMOL)
+    - Conversão e carregamento de estrutura limpa sem solvente (md_clean_nowat.pdb / md_clean.pdb)
+    - Carregamento da trajetória ajustada md_fit.xtc
     - Fundo branco de publicação (set bg_rgb, [1, 1, 1])
     - Proteína em cartoon ciano suave (color cyan, polymer)
     - Ligante (LIG) em bastões coloridos por elemento (color magenta)
     - Seleção e destaque em bastões dos resíduos do sítio ativo mapeados no interactions.json
     - Linhas tracejadas amarelas para pontes de hidrogênio com rótulos de distância
-    - Foco e enquadramento automático do sítio ativo (zoom)
+    - Foco e enquadramento automático do ligante (center, zoom, orient)
 
     :param work_dir: Diretório de trabalho contendo md_clean.gro / complex.pdb e interactions.json.
     :return: Caminho do arquivo show_complex.pml gerado.
     """
-    work_dir = Path(work_dir)
+    work_dir = Path(work_dir).resolve()
     if not work_dir.exists():
         raise FileNotFoundError(f"Diretório de trabalho não encontrado: {work_dir}")
 
@@ -56,6 +61,101 @@ def generate_pymol_script(work_dir: Path) -> Path:
         raise FileNotFoundError(
             f"Nenhum arquivo de estrutura ('md_clean.gro' ou 'complex.pdb') encontrado no diretório: {work_dir}"
         )
+
+    # 0. Tenta gerar versões PDB sem água para carregamento e renderização instantâneos no PyMOL
+    gmx_bin = shutil.which("gmx")
+    if not gmx_bin:
+        from docking.md_prep import find_executable
+        gmx_bin = find_executable("gmx")
+
+    tpr_file = work_dir / "md.tpr"
+    if not tpr_file.exists():
+        matches_tpr = list(work_dir.glob("*_md.tpr"))
+        if matches_tpr:
+            tpr_file = matches_tpr[0]
+
+    index_file = work_dir / "index.ndx"
+    if not index_file.exists():
+        matches_ndx = list(work_dir.glob("*_index.ndx"))
+        if matches_ndx:
+            index_file = matches_ndx[0]
+
+    nowat_pdb = work_dir / "md_clean_nowat.pdb"
+    if not nowat_pdb.exists() and gmx_bin and struct_file and struct_file.exists() and tpr_file.exists() and index_file.exists():
+        try:
+            env = os.environ.copy()
+            subprocess.run(
+                [gmx_bin, "trjconv", "-s", str(tpr_file.name), "-f", str(struct_file.name), "-n", str(index_file.name), "-o", "md_clean_nowat.pdb"],
+                cwd=str(work_dir),
+                input=b"Protein_LIG\n",
+                capture_output=True,
+                env=env,
+                check=False,
+            )
+        except Exception:
+            pass
+
+    clean_pdb = work_dir / "md_clean.pdb"
+    if not clean_pdb.exists() and not nowat_pdb.exists() and gmx_bin and struct_file and struct_file.exists():
+        try:
+            env = os.environ.copy()
+            subprocess.run(
+                [gmx_bin, "editconf", "-f", str(struct_file.name), "-o", "md_clean.pdb"],
+                cwd=str(work_dir),
+                capture_output=True,
+                env=env,
+                check=False,
+            )
+        except Exception:
+            pass
+
+    # Verifica se a estrutura medóide mais representativa do cluster está presente
+    medoid_file = work_dir / "cluster_medoid.gro"
+    if not medoid_file.exists():
+        matches_medoid = list(work_dir.glob("*cluster_medoid.gro")) or list(work_dir.glob("*/cluster_medoid.gro"))
+        if matches_medoid:
+            medoid_file = matches_medoid[0]
+
+    medoid_pdb = work_dir / "cluster_medoid.pdb"
+    if not medoid_pdb.exists() and gmx_bin and medoid_file and medoid_file.exists():
+        try:
+            env = os.environ.copy()
+            subprocess.run(
+                [gmx_bin, "editconf", "-f", str(medoid_file.name), "-o", "cluster_medoid.pdb"],
+                cwd=str(work_dir),
+                capture_output=True,
+                env=env,
+                check=False,
+            )
+        except Exception:
+            pass
+
+    # Trajetória ajustada (PBC Corrigido & Fit rot+trans)
+    fit_xtc_file = work_dir / "md_fit.xtc"
+    if not fit_xtc_file.exists():
+        matches_xtc = list(work_dir.glob("*md_fit.xtc")) or list(work_dir.glob("*/md_fit.xtc"))
+        if matches_xtc:
+            fit_xtc_file = matches_xtc[0]
+
+    nowat_xtc = work_dir / "md_fit_nowat.xtc"
+    if not nowat_xtc.exists() and gmx_bin and fit_xtc_file and fit_xtc_file.exists() and tpr_file.exists() and index_file.exists():
+        try:
+            env = os.environ.copy()
+            subprocess.run(
+                [gmx_bin, "trjconv", "-s", str(tpr_file.name), "-f", str(fit_xtc_file.name), "-n", str(index_file.name), "-o", "md_fit_nowat.xtc", "-dt", "100"],
+                cwd=str(work_dir),
+                input=b"Protein_LIG\n",
+                capture_output=True,
+                env=env,
+                check=False,
+            )
+        except Exception:
+            pass
+
+    # Escolhe o melhor arquivo de estrutura primária e trajetória compatível
+    primary_struct = "md_clean_nowat.pdb" if nowat_pdb.exists() else ("md_clean.pdb" if clean_pdb.exists() else struct_file.name)
+    primary_xtc = "md_fit_nowat.xtc" if (nowat_pdb.exists() and nowat_xtc.exists()) else (fit_xtc_file.name if fit_xtc_file and fit_xtc_file.exists() and not nowat_pdb.exists() else None)
+    primary_medoid = "cluster_medoid.pdb" if medoid_pdb.exists() else (medoid_file.name if medoid_file and medoid_file.exists() else None)
 
     # Leitura do interactions.json (se existir)
     interactions_file = work_dir / "interactions.json"
@@ -67,7 +167,7 @@ def generate_pymol_script(work_dir: Path) -> Path:
     hbonds: List[Dict[str, Any]] = []
     hcontacts: List[Dict[str, Any]] = []
 
-    if interactions_file.exists():
+    if interactions_file and interactions_file.exists():
         try:
             with open(interactions_file, "r", encoding="utf-8") as f:
                 inter_data = json.load(f)
@@ -91,44 +191,23 @@ def generate_pymol_script(work_dir: Path) -> Path:
 
     sorted_resnrs = sorted(list(key_residue_numbers))
 
-    # Verifica se a trajetória tratada md_fit.xtc está presente
-    fit_xtc_file = work_dir / "md_fit.xtc"
-    if not fit_xtc_file.exists():
-        matches_xtc = list(work_dir.glob("*/md_fit.xtc"))
-        if matches_xtc:
-            fit_xtc_file = matches_xtc[0]
-        else:
-            for parent in [work_dir] + list(work_dir.parents):
-                candidate_md = parent / "md_files"
-                if candidate_md.exists() and (candidate_md / "md_fit.xtc").exists():
-                    fit_xtc_file = candidate_md / "md_fit.xtc"
-                    break
-
-    # Verifica se a estrutura medóide mais representativa do cluster está presente
-    medoid_file = work_dir / "cluster_medoid.gro"
-    if not medoid_file.exists():
-        matches_medoid = list(work_dir.glob("*/cluster_medoid.gro"))
-        if matches_medoid:
-            medoid_file = matches_medoid[0]
-        else:
-            for parent in [work_dir] + list(work_dir.parents):
-                candidate_md = parent / "md_files"
-                if candidate_md.exists() and (candidate_md / "cluster_medoid.gro").exists():
-                    medoid_file = candidate_md / "cluster_medoid.gro"
-                    break
-
-    try:
-        struct_rel = str(struct_file.resolve().relative_to(work_dir.resolve())).replace("\\", "/")
-    except ValueError:
-        struct_rel = str(struct_file.name)
+    work_dir_posix = str(work_dir).replace("\\", "/")
 
     # Monta comandos do script PyMOL
     pml_lines = [
         "# ==============================================================================",
         "# PyMOL Automated Visualization Script",
         "# Generated automatically by Molecular Docking Pipeline",
-        "# Structure: md_clean.gro / Trajectory: md_fit.xtc / Cluster: cluster_medoid.gro",
         "# ==============================================================================",
+        "",
+        "# 0. Garantia de Diretório de Trabalho Autônomo (Python API do PyMOL)",
+        "python",
+        "import os",
+        "try:",
+        f"    os.chdir(r'{work_dir_posix}')",
+        "except Exception:",
+        "    pass",
+        "python end",
         "",
         "# 1. Inicialização e Configurações de Fundo e Renderização",
         "reinitialize",
@@ -140,33 +219,25 @@ def generate_pymol_script(work_dir: Path) -> Path:
         "set cartoon_fancy_helices, 1",
         "set cartoon_smooth_loops, 1",
         "",
-        "# 2. Carregamento do Complexo Receptor-Ligante (md_clean.gro)",
-        f"load {struct_rel}, complex",
+        "# 2. Carregamento do Complexo Receptor-Ligante",
+        f"load {primary_struct}, complex",
     ]
 
-    if fit_xtc_file and fit_xtc_file.exists():
-        try:
-            xtc_rel = str(fit_xtc_file.resolve().relative_to(work_dir.resolve())).replace("\\", "/")
-        except ValueError:
-            xtc_rel = str(fit_xtc_file.name)
+    if primary_xtc:
         pml_lines.extend(
             [
                 "",
-                "# 2.1 Carregamento da Trajetória Ajustada (md_fit.xtc - PBC Corrigido & Fit rot+trans)",
-                f"load_traj {xtc_rel}, complex",
+                "# 2.1 Carregamento da Trajetória Ajustada (PBC Corrigido & Fit rot+trans)",
+                f"load_traj {primary_xtc}, complex",
             ]
         )
 
-    if medoid_file and medoid_file.exists():
-        try:
-            medoid_rel = str(medoid_file.resolve().relative_to(work_dir.resolve())).replace("\\", "/")
-        except ValueError:
-            medoid_rel = str(medoid_file.name)
+    if primary_medoid:
         pml_lines.extend(
             [
                 "",
                 "# 2.2 Estrutura Representativa do Cluster de Equilíbrio (GROMOS Medoid)",
-                f"load {medoid_rel}, rep_cluster",
+                f"load {primary_medoid}, rep_cluster",
                 "remove (rep_cluster and (resn SOL or resn HOH or resn NA or resn CL or resn TIP3 or resn ION))",
                 "hide everything, rep_cluster",
                 "show cartoon, rep_cluster and polymer",
@@ -177,7 +248,8 @@ def generate_pymol_script(work_dir: Path) -> Path:
                 "color orange, rep_ligand",
                 "util.cnc rep_ligand",
                 "set stick_radius, 0.22, rep_ligand",
-                "disable rep_cluster  # Disponível para alternar visibilidade (overlay)",
+                "# Disponível para alternar visibilidade (overlay)",
+                "disable rep_cluster",
             ]
         )
 
@@ -224,7 +296,7 @@ def generate_pymol_script(work_dir: Path) -> Path:
         pml_lines.extend(
             [
                 "# 5. Resíduos do Sítio de Ligação (Raio de Proximidade 5Å)",
-                "select key_residues, polymer within 5.0 of resn LIG",
+                "select key_residues, polymer within 5.0 of ligand",
                 "show sticks, key_residues",
                 "color gray80, key_residues and elem C",
                 "util.cnc key_residues",
@@ -247,7 +319,7 @@ def generate_pymol_script(work_dir: Path) -> Path:
                 unique_hb_pairs.add(resnr)
                 pml_lines.append(f"# H-Bond {resname} {resnr}")
                 pml_lines.append(
-                    f"distance hb_{resname}_{resnr}, (polymer and resi {resnr}), (resn LIG), 4.2, mode=2"
+                    f"distance hb_{resname}_{resnr}, (polymer and resi {resnr}), (ligand), 4.2, mode=2"
                 )
 
         pml_lines.extend(
@@ -266,9 +338,9 @@ def generate_pymol_script(work_dir: Path) -> Path:
     pml_lines.extend(
         [
             "# 7. Centralização e Foco no Sítio Ativo",
-            "center resn LIG",
-            "zoom resn LIG, 8",
-            "orient resn LIG",
+            "center ligand",
+            "zoom ligand, 8",
+            "orient ligand",
             "",
             "# Deselecionar tudo para limpar a visualização",
             "deselect",
