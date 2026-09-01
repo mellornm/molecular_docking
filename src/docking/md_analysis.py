@@ -288,9 +288,7 @@ Após o término, copie de volta os arquivos `{prefix}md.xtc` e `{prefix}md.tpr`
     return target_export_dir
 
 
-def compile_production_tpr(
-    working_dir: Path, target_id: Optional[str] = None
-) -> Path:
+def compile_production_tpr(working_dir: Path, target_id: Optional[str] = None) -> Path:
     """
     Compila o arquivo de entrada binário para a produção da Dinâmica Molecular (<target_id>_md.tpr)
     usando o comando 'gmx grompp' a partir de npt.gro, npt.cpt, topol.top, index.ndx e md.mdp.
@@ -310,7 +308,9 @@ def compile_production_tpr(
     if not target_id:
         target_id = sanitize_target_id(working_dir.name)
         if target_id.lower() in ("md_files", "screening", "data"):
-            gro_files = list(working_dir.glob("*_npt.gro")) or list(working_dir.glob("*_em.gro"))
+            gro_files = list(working_dir.glob("*_npt.gro")) or list(
+                working_dir.glob("*_em.gro")
+            )
             if gro_files:
                 target_id = gro_files[0].stem.replace("_npt", "").replace("_em", "")
     target_id = sanitize_target_id(target_id)
@@ -342,7 +342,9 @@ def compile_production_tpr(
 
     gmx_bin = find_executable("gmx")
     if not gmx_bin:
-        raise DependencyError("O executável 'gmx' (GROMACS) não foi encontrado no PATH.")
+        raise DependencyError(
+            "O executável 'gmx' (GROMACS) não foi encontrado no PATH."
+        )
 
     # Resolução do template md.mdp
     project_root = Path(__file__).resolve().parent.parent.parent
@@ -401,7 +403,9 @@ def compile_production_tpr(
         )
 
     if not target_tpr.exists():
-        raise FileNotFoundError(f"Arquivo '{target_tpr.name}' não foi gerado em: {working_dir}")
+        raise FileNotFoundError(
+            f"Arquivo '{target_tpr.name}' não foi gerado em: {working_dir}"
+        )
 
     # Espelho md.tpr
     shutil.copy2(target_tpr, working_dir / "md.tpr")
@@ -418,9 +422,7 @@ def compile_production_tpr(
     return target_tpr
 
 
-def run_production_md(
-    working_dir: Path, target_id: Optional[str] = None
-):
+def run_production_md(working_dir: Path, target_id: Optional[str] = None):
     """
     Compila e executa a etapa de Produção de Dinâmica Molecular no GROMACS.
     """
@@ -432,7 +434,9 @@ def run_production_md(
     if not target_id:
         target_id = sanitize_target_id(working_dir.name)
         if target_id.lower() in ("md_files", "screening", "data"):
-            gro_files = list(working_dir.glob("*_npt.gro")) or list(working_dir.glob("*_em.gro"))
+            gro_files = list(working_dir.glob("*_npt.gro")) or list(
+                working_dir.glob("*_em.gro")
+            )
             if gro_files:
                 target_id = gro_files[0].stem.replace("_npt", "").replace("_em", "")
     target_id = sanitize_target_id(target_id)
@@ -440,7 +444,9 @@ def run_production_md(
 
     gmx_bin = find_executable("gmx")
     if not gmx_bin:
-        raise DependencyError("O executável 'gmx' (GROMACS) não foi encontrado no PATH.")
+        raise DependencyError(
+            "O executável 'gmx' (GROMACS) não foi encontrado no PATH."
+        )
 
     # 1. Compilação do arquivo de produção (grompp -> <target_id>_md.tpr)
     compile_production_tpr(working_dir, target_id=target_id)
@@ -521,7 +527,9 @@ def fix_pbc(
     if not target_id:
         target_id = sanitize_target_id(working_dir.name)
         if target_id.lower() in ("md_files", "screening", "data"):
-            candidates = list(working_dir.glob("*_md.tpr")) or list(working_dir.glob("*_md.xtc"))
+            candidates = list(working_dir.glob("*_md.tpr")) or list(
+                working_dir.glob("*_md.xtc")
+            )
             if candidates:
                 target_id = candidates[0].stem.replace("_md", "")
     target_id = sanitize_target_id(target_id)
@@ -537,7 +545,11 @@ def fix_pbc(
             shutil.copy2(md_clean_path, working_dir / "md_clean.gro")
         return md_fit_path
 
-    if not force and (working_dir / "md_fit.xtc").exists() and (working_dir / "md_clean.gro").exists():
+    if (
+        not force
+        and (working_dir / "md_fit.xtc").exists()
+        and (working_dir / "md_clean.gro").exists()
+    ):
         return working_dir / "md_fit.xtc"
 
     tpr_file = working_dir / f"{prefix}md.tpr"
@@ -559,7 +571,9 @@ def fix_pbc(
 
     gmx_bin = find_executable("gmx")
     if not gmx_bin:
-        raise DependencyError("O executável 'gmx' (GROMACS) não foi encontrado no PATH.")
+        raise DependencyError(
+            "O executável 'gmx' (GROMACS) não foi encontrado no PATH."
+        )
 
     def run_trjconv_cmd(cmd: List[str], input_val: str, step_name: str):
         try:
@@ -636,10 +650,14 @@ def fix_pbc(
 
     # Etapa 3: Estrutura Estática Limpa para Visualização no PyMOL
     gro_candidates = [
-        f"{prefix}md.gro", "md.gro",
-        f"{prefix}npt.gro", "npt.gro",
-        f"{prefix}em.gro", "em.gro",
-        f"{prefix}complex.gro", "complex.gro"
+        f"{prefix}md.gro",
+        "md.gro",
+        f"{prefix}npt.gro",
+        "npt.gro",
+        f"{prefix}em.gro",
+        "em.gro",
+        f"{prefix}complex.gro",
+        "complex.gro",
     ]
     gro_source = None
     for cand in gro_candidates:
@@ -682,9 +700,7 @@ def fix_pbc(
     return md_fit_path if md_fit_path.exists() else working_dir / "md_fit.xtc"
 
 
-def analyze_trajectory(
-    working_dir: Path, target_id: Optional[str] = None
-):
+def analyze_trajectory(working_dir: Path, target_id: Optional[str] = None):
     """
     Executa a análise quantitativa da trajetória de Dinâmica Molecular no GROMACS (Janela Completa: 0 - 100 ns):
     1. RMSD do Backbone da Proteína e do Ligante
@@ -706,7 +722,9 @@ def analyze_trajectory(
     if not target_id:
         target_id = sanitize_target_id(working_dir.name)
         if target_id.lower() in ("md_files", "screening", "data"):
-            candidates = list(working_dir.glob("*_md.tpr")) or list(working_dir.glob("*_md_fit.xtc"))
+            candidates = list(working_dir.glob("*_md.tpr")) or list(
+                working_dir.glob("*_md_fit.xtc")
+            )
             if candidates:
                 target_id = candidates[0].stem.replace("_md_fit", "").replace("_md", "")
     target_id = sanitize_target_id(target_id)
@@ -732,9 +750,13 @@ def analyze_trajectory(
 
     gmx_bin = find_executable("gmx")
     if not gmx_bin:
-        raise DependencyError("O executável 'gmx' (GROMACS) não foi encontrado no PATH.")
+        raise DependencyError(
+            "O executável 'gmx' (GROMACS) não foi encontrado no PATH."
+        )
 
-    def run_analysis_cmd(cmd: List[str], cwd: Path, input_val: str, step_name: str = ""):
+    def run_analysis_cmd(
+        cmd: List[str], cwd: Path, input_val: str, step_name: str = ""
+    ):
         try:
             env = os.environ.copy()
             env.pop("PYTHONPATH", None)
@@ -792,7 +814,9 @@ def analyze_trajectory(
         "-tu",
         "ns",
     ]
-    run_analysis_cmd(cmd_rmsd, working_dir, "4\n4\n", "RMSD do esqueleto da proteína (Backbone)")
+    run_analysis_cmd(
+        cmd_rmsd, working_dir, "4\n4\n", "RMSD do esqueleto da proteína (Backbone)"
+    )
     shutil.copy2(working_dir / rmsd_xvg, working_dir / "rmsd.xvg")
 
     # 1.2 RMSD do Ligante no sítio ativo (Fit: Backbone 4, Calc: Ligand)
@@ -926,7 +950,12 @@ def analyze_trajectory(
         "ns",
     ]
     try:
-        run_analysis_cmd(cmd_sasa, working_dir, "1\n", "Área de Superfície Acessível ao Solvente (SASA)")
+        run_analysis_cmd(
+            cmd_sasa,
+            working_dir,
+            "1\n",
+            "Área de Superfície Acessível ao Solvente (SASA)",
+        )
         shutil.copy2(working_dir / sasa_xvg, working_dir / "sasa.xvg")
     except Exception:
         pass
@@ -1076,7 +1105,9 @@ def plot_md_results(
     if not target_id:
         target_id = sanitize_target_id(working_dir.name)
         if target_id.lower() in ("md_files", "screening", "data"):
-            candidates = list(working_dir.glob("*_rmsd.xvg")) or list(working_dir.glob("*_md.tpr"))
+            candidates = list(working_dir.glob("*_rmsd.xvg")) or list(
+                working_dir.glob("*_md.tpr")
+            )
             if candidates:
                 target_id = candidates[0].stem.replace("_rmsd", "").replace("_md", "")
     target_id = sanitize_target_id(target_id)
@@ -1312,7 +1343,11 @@ def plot_md_results(
 
             ax.set_xlabel("Time (ns)", fontweight="bold")
             ax.set_ylabel("H-Bonds count", fontweight="bold")
-            ax.set_title(f"Protein–Ligand Hydrogen Bonds ({target_id} | 0 - 100 ns)", fontweight="bold", pad=12)
+            ax.set_title(
+                f"Protein–Ligand Hydrogen Bonds ({target_id} | 0 - 100 ns)",
+                fontweight="bold",
+                pad=12,
+            )
             ax.set_xlim(left=0, right=max(x_time) if x_time else 100.0)
             ax.set_ylim(bottom=0)
             ax.legend(loc="upper right", frameon=True, framealpha=0.9)
@@ -1337,21 +1372,45 @@ def plot_md_results(
                     x_time = [t / 1000.0 for t in x_time]
 
                 fig, ax = plt.subplots(figsize=(8.0, 4.5), dpi=300)
-                total_key = next((k for k in y_dict.keys() if "total" in k.lower() or "rg" in k.lower()), list(y_dict.keys())[0])
+                total_key = next(
+                    (
+                        k
+                        for k in y_dict.keys()
+                        if "total" in k.lower() or "rg" in k.lower()
+                    ),
+                    list(y_dict.keys())[0],
+                )
                 y_total = y_dict[total_key]
-                ax.plot(x_time, y_total, color="#457b9d", linewidth=1.4, alpha=0.85, label=f"Total Rg ({total_key})")
+                ax.plot(
+                    x_time,
+                    y_total,
+                    color="#457b9d",
+                    linewidth=1.4,
+                    alpha=0.85,
+                    label=f"Total Rg ({total_key})",
+                )
 
                 mean_rg = sum(y_total) / len(y_total)
-                ax.axhline(mean_rg, color="#1d3557", linestyle="--", alpha=0.7, label=f"Mean Rg: {mean_rg:.3f} nm")
+                ax.axhline(
+                    mean_rg,
+                    color="#1d3557",
+                    linestyle="--",
+                    alpha=0.7,
+                    label=f"Mean Rg: {mean_rg:.3f} nm",
+                )
 
                 ax.set_xlabel("Time (ns)", fontweight="bold")
                 ax.set_ylabel("Radius of Gyration (nm)", fontweight="bold")
-                ax.set_title(f"Protein Compactness & Folding Stability ({target_id} | 0 - 100 ns)", fontweight="bold", pad=12)
+                ax.set_title(
+                    f"Protein Compactness & Folding Stability ({target_id} | 0 - 100 ns)",
+                    fontweight="bold",
+                    pad=12,
+                )
                 ax.set_xlim(left=0, right=max(x_time) if x_time else 100.0)
                 ax.legend(loc="upper right", frameon=True, framealpha=0.9)
 
                 out_gyrate_png = working_dir / f"{prefix}gyrate.png"
-                fig.savefig(out_gyrate_png, dpi=300, bbox_inches="tight")
+                fig.savefig(out_gyrate_png, dpi=300, bbox_inches="tight")  # type: ignore
                 plt.close(fig)
                 shutil.copy2(out_gyrate_png, working_dir / "gyrate.png")
                 generated_plots["gyrate"] = out_gyrate_png
@@ -1374,19 +1433,36 @@ def plot_md_results(
                 fig, ax = plt.subplots(figsize=(8.0, 4.5), dpi=300)
                 total_key = list(y_dict.keys())[0]
                 y_sasa = y_dict[total_key]
-                ax.plot(x_time, y_sasa, color="#2b9348", linewidth=1.4, alpha=0.85, label="Total SASA")
+                ax.plot(
+                    x_time,
+                    y_sasa,
+                    color="#2b9348",
+                    linewidth=1.4,
+                    alpha=0.85,
+                    label="Total SASA",
+                )
 
                 mean_sasa = sum(y_sasa) / len(y_sasa)
-                ax.axhline(mean_sasa, color="#007f5f", linestyle="--", alpha=0.7, label=f"Mean SASA: {mean_sasa:.2f} nm²")
+                ax.axhline(
+                    mean_sasa,
+                    color="#007f5f",
+                    linestyle="--",
+                    alpha=0.7,
+                    label=f"Mean SASA: {mean_sasa:.2f} nm²",
+                )
 
                 ax.set_xlabel("Time (ns)", fontweight="bold")
                 ax.set_ylabel(r"SASA ($\mathrm{nm}^2$)", fontweight="bold")
-                ax.set_title(f"Solvent Accessible Surface Area ({target_id} | 0 - 100 ns)", fontweight="bold", pad=12)
+                ax.set_title(
+                    f"Solvent Accessible Surface Area ({target_id} | 0 - 100 ns)",
+                    fontweight="bold",
+                    pad=12,
+                )
                 ax.set_xlim(left=0, right=max(x_time) if x_time else 100.0)
                 ax.legend(loc="upper right", frameon=True, framealpha=0.9)
 
                 out_sasa_png = working_dir / f"{prefix}sasa.png"
-                fig.savefig(out_sasa_png, dpi=300, bbox_inches="tight")
+                fig.savefig(out_sasa_png, dpi=300, bbox_inches="tight")  # type: ignore
                 plt.close(fig)
                 shutil.copy2(out_sasa_png, working_dir / "sasa.png")
                 generated_plots["sasa"] = out_sasa_png
@@ -1401,7 +1477,9 @@ def plot_md_results(
     if decomp_dat_file.exists():
         decomp_data = parse_mmpbsa_decomp(decomp_dat_file)
         if decomp_data:
-            out_decomp_png = plot_mmpbsa_decomp(decomp_data, working_dir, target_id=target_id)
+            out_decomp_png = plot_mmpbsa_decomp(
+                decomp_data, working_dir, target_id=target_id
+            )
             if out_decomp_png:
                 generated_plots["decomp"] = out_decomp_png
 
@@ -1424,7 +1502,9 @@ def calculate_clusters(
     if not target_id:
         target_id = sanitize_target_id(working_dir.name)
         if target_id.lower() in ("md_files", "screening", "data"):
-            candidates = list(working_dir.glob("*_md.tpr")) or list(working_dir.glob("*_md_fit.xtc"))
+            candidates = list(working_dir.glob("*_md.tpr")) or list(
+                working_dir.glob("*_md_fit.xtc")
+            )
             if candidates:
                 target_id = candidates[0].stem.replace("_md_fit", "").replace("_md", "")
     target_id = sanitize_target_id(target_id)
@@ -1495,7 +1575,9 @@ def calculate_clusters(
     return None
 
 
-def parse_hbond_occupancy(working_dir: Path, total_frames: int = 1000) -> List[Dict[str, Any]]:
+def parse_hbond_occupancy(
+    working_dir: Path, total_frames: int = 1000
+) -> List[Dict[str, Any]]:
     """
     Faz o parsing das pontes de hidrogênio geradas pelo GROMACS (hbond.log / hbond.ndx)
     para quantificar a persistência temporal e ocupação percentual por par de resíduos.
@@ -1512,20 +1594,34 @@ def parse_hbond_occupancy(working_dir: Path, total_frames: int = 1000) -> List[D
 
             for line in lines:
                 line_str = line.strip()
-                if "%" in line_str and ("-" in line_str or "atom" in line_str.lower() or "res" in line_str.lower() or "side" in line_str.lower() or "main" in line_str.lower()):
+                if "%" in line_str and (
+                    "-" in line_str
+                    or "atom" in line_str.lower()
+                    or "res" in line_str.lower()
+                    or "side" in line_str.lower()
+                    or "main" in line_str.lower()
+                ):
                     parts = line_str.split()
                     pct_str = [p for p in parts if "%" in p]
                     if pct_str:
                         try:
-                            pct_val = float(pct_str[0].replace("%", "").replace(",", "."))
+                            pct_val = float(
+                                pct_str[0].replace("%", "").replace(",", ".")
+                            )
                             donor = parts[0] if len(parts) > 0 else "UNK"
                             acceptor = parts[1] if len(parts) > 1 else "LIG"
-                            occupancy_list.append({
-                                "donor": donor,
-                                "acceptor": acceptor,
-                                "occupancy_percent": round(pct_val, 2),
-                                "classification": "Permanente / Âncora Farmacofórica" if pct_val >= 75.0 else ("Moderada" if pct_val >= 35.0 else "Transitória")
-                            })
+                            occupancy_list.append(
+                                {
+                                    "donor": donor,
+                                    "acceptor": acceptor,
+                                    "occupancy_percent": round(pct_val, 2),
+                                    "classification": "Permanente / Âncora Farmacofórica"
+                                    if pct_val >= 75.0
+                                    else (
+                                        "Moderada" if pct_val >= 35.0 else "Transitória"
+                                    ),
+                                }
+                            )
                         except ValueError:
                             continue
         except Exception:
@@ -1557,19 +1653,36 @@ def parse_mmpbsa_decomp(decomp_path: Path) -> List[Dict[str, Any]]:
     in_total_decomp = False
     for line in lines:
         line_clean = line.strip()
-        if not line_clean or line_clean.startswith("#") or line_clean.startswith("---") or line_clean.startswith("|"):
+        if (
+            not line_clean
+            or line_clean.startswith("#")
+            or line_clean.startswith("---")
+            or line_clean.startswith("|")
+        ):
             continue
 
-        if "Total Energy Decomposition:" in line_clean or "DELTAS:" in line_clean or "Energy Decomposition Analysis" in line_clean or "TDC" in line_clean:
+        if (
+            "Total Energy Decomposition:" in line_clean
+            or "DELTAS:" in line_clean
+            or "Energy Decomposition Analysis" in line_clean
+            or "TDC" in line_clean
+        ):
             in_total_decomp = True
             continue
 
         # Sai da seção Total Energy Decomposition se encontrar outra seção como Sidechain ou Backbone
-        if in_total_decomp and ("Sidechain Energy Decomposition:" in line_clean or "Backbone Energy Decomposition:" in line_clean):
+        if in_total_decomp and (
+            "Sidechain Energy Decomposition:" in line_clean
+            or "Backbone Energy Decomposition:" in line_clean
+        ):
             break
 
         if in_total_decomp:
-            if line_clean.startswith("Residue") or line_clean.startswith(",Avg") or line_clean.startswith("==="):
+            if (
+                line_clean.startswith("Residue")
+                or line_clean.startswith(",Avg")
+                or line_clean.startswith("===")
+            ):
                 continue
 
             # 1. Formato CSV do gmx_MMPBSA (Residue, Internal, vdW, Elec, Polar, Non-Polar, Total)
@@ -1577,7 +1690,11 @@ def parse_mmpbsa_decomp(decomp_path: Path) -> List[Dict[str, Any]]:
                 parts = [p.strip() for p in line_clean.split(",")]
                 if len(parts) >= 17:
                     res_raw = parts[0]
-                    if not res_raw or res_raw.lower().startswith("residue") or res_raw.lower().startswith("avg"):
+                    if (
+                        not res_raw
+                        or res_raw.lower().startswith("residue")
+                        or res_raw.lower().startswith("avg")
+                    ):
                         continue
                     try:
                         vdw_mean = float(parts[4])
@@ -1585,19 +1702,25 @@ def parse_mmpbsa_decomp(decomp_path: Path) -> List[Dict[str, Any]]:
                         polar_mean = float(parts[10])
                         apolar_mean = float(parts[13])
                         total_mean = float(parts[16])
-                        total_std = float(parts[17]) if len(parts) > 17 and parts[17] else 0.0
-                        total_sem = float(parts[18]) if len(parts) > 18 and parts[18] else 0.0
+                        total_std = (
+                            float(parts[17]) if len(parts) > 17 and parts[17] else 0.0
+                        )
+                        total_sem = (
+                            float(parts[18]) if len(parts) > 18 and parts[18] else 0.0
+                        )
 
-                        residues_data.append({
-                            "residue": res_raw,
-                            "vdw": round(vdw_mean, 3),
-                            "electrostatic": round(eel_mean, 3),
-                            "polar": round(polar_mean, 3),
-                            "nonpolar": round(apolar_mean, 3),
-                            "total": round(total_mean, 3),
-                            "std": round(total_std, 3),
-                            "sem": round(total_sem, 3),
-                        })
+                        residues_data.append(
+                            {
+                                "residue": res_raw,
+                                "vdw": round(vdw_mean, 3),
+                                "electrostatic": round(eel_mean, 3),
+                                "polar": round(polar_mean, 3),
+                                "nonpolar": round(apolar_mean, 3),
+                                "total": round(total_mean, 3),
+                                "std": round(total_std, 3),
+                                "sem": round(total_sem, 3),
+                            }
+                        )
                         continue
                     except ValueError:
                         pass
@@ -1611,7 +1734,11 @@ def parse_mmpbsa_decomp(decomp_path: Path) -> List[Dict[str, Any]]:
                         total_col = cols[-1]
                         total_parts = total_col.replace("±", "+/-").split("+/-")
                         total_mean = float(total_parts[0].strip())
-                        total_std = float(total_parts[1].strip()) if len(total_parts) > 1 else 0.0
+                        total_std = (
+                            float(total_parts[1].strip())
+                            if len(total_parts) > 1
+                            else 0.0
+                        )
 
                         vdw_mean = 0.0
                         if len(cols) > 2:
@@ -1629,14 +1756,16 @@ def parse_mmpbsa_decomp(decomp_path: Path) -> List[Dict[str, Any]]:
                             except ValueError:
                                 eel_mean = 0.0
 
-                        residues_data.append({
-                            "residue": res_raw,
-                            "vdw": round(vdw_mean, 3),
-                            "electrostatic": round(eel_mean, 3),
-                            "total": round(total_mean, 3),
-                            "std": round(total_std, 3),
-                            "sem": 0.0,
-                        })
+                        residues_data.append(
+                            {
+                                "residue": res_raw,
+                                "vdw": round(vdw_mean, 3),
+                                "electrostatic": round(eel_mean, 3),
+                                "total": round(total_mean, 3),
+                                "std": round(total_std, 3),
+                                "sem": 0.0,
+                            }
+                        )
                     except ValueError:
                         continue
             else:
@@ -1645,14 +1774,16 @@ def parse_mmpbsa_decomp(decomp_path: Path) -> List[Dict[str, Any]]:
                     res_raw = parts[0]
                     try:
                         total_mean = float(parts[-1])
-                        residues_data.append({
-                            "residue": res_raw,
-                            "vdw": 0.0,
-                            "electrostatic": 0.0,
-                            "total": round(total_mean, 3),
-                            "std": 0.0,
-                            "sem": 0.0,
-                        })
+                        residues_data.append(
+                            {
+                                "residue": res_raw,
+                                "vdw": 0.0,
+                                "electrostatic": 0.0,
+                                "total": round(total_mean, 3),
+                                "std": 0.0,
+                                "sem": 0.0,
+                            }
+                        )
                     except ValueError:
                         continue
 
@@ -1677,9 +1808,15 @@ def plot_mmpbsa_decomp(
     if not target_id:
         target_id = sanitize_target_id(working_dir.name)
         if target_id.lower() in ("md_files", "screening", "data"):
-            candidates = list(working_dir.glob("*_FINAL_DECOMP_MMPBSA.dat")) or list(working_dir.glob("*_md.tpr"))
+            candidates = list(working_dir.glob("*_FINAL_DECOMP_MMPBSA.dat")) or list(
+                working_dir.glob("*_md.tpr")
+            )
             if candidates:
-                target_id = candidates[0].stem.replace("_FINAL_DECOMP_MMPBSA", "").replace("_md", "")
+                target_id = (
+                    candidates[0]
+                    .stem.replace("_FINAL_DECOMP_MMPBSA", "")
+                    .replace("_md", "")
+                )
     target_id = sanitize_target_id(target_id)
     prefix = f"{target_id}_"
 
@@ -1729,17 +1866,32 @@ def plot_mmpbsa_decomp(
     ax.set_yticks(y_pos)
     ax.set_yticklabels(labels, fontweight="bold")
     ax.axvline(0, color="gray", linestyle="--", linewidth=0.9, alpha=0.7)
-    ax.set_xlabel(r"Per-Residue $\Delta G_{\mathrm{bind}}$ Contribution (kcal/mol)", fontweight="bold")
-    ax.set_title(f"MM-PBSA Per-Residue Free Energy Decomposition ({target_id} | Hotspots)", fontweight="bold", pad=12)
+    ax.set_xlabel(
+        r"Per-Residue $\Delta G_{\mathrm{bind}}$ Contribution (kcal/mol)",
+        fontweight="bold",
+    )
+    ax.set_title(
+        f"MM-PBSA Per-Residue Free Energy Decomposition ({target_id} | Hotspots)",
+        fontweight="bold",
+        pad=12,
+    )
 
     for idx, bar in enumerate(bars):
         val = totals[idx]
         offset = 0.12 if val >= 0 else -0.12
         ha = "left" if val >= 0 else "right"
-        ax.text(val + offset, bar.get_y() + bar.get_height() / 2, f"{val:.2f}", va="center", ha=ha, fontsize=8.5, fontweight="bold")
+        ax.text(
+            val + offset,
+            bar.get_y() + bar.get_height() / 2,
+            f"{val:.2f}",
+            va="center",
+            ha=ha,
+            fontsize=8.5,
+            fontweight="bold",
+        )
 
     out_png = working_dir / f"{prefix}decomp_mmpbsa.png"
-    fig.savefig(out_png, dpi=300, bbox_inches="tight")
+    fig.savefig(out_png, dpi=300, bbox_inches="tight")  # type: ignore
     plt.close(fig)
     shutil.copy2(out_png, working_dir / "decomp_mmpbsa.png")
     return out_png
@@ -1756,7 +1908,9 @@ def export_analysis_csv(
     if not target_id:
         target_id = sanitize_target_id(working_dir.name)
         if target_id.lower() in ("md_files", "screening", "data"):
-            candidates = list(working_dir.glob("*_rmsd.xvg")) or list(working_dir.glob("*_md.tpr"))
+            candidates = list(working_dir.glob("*_rmsd.xvg")) or list(
+                working_dir.glob("*_md.tpr")
+            )
             if candidates:
                 target_id = candidates[0].stem.replace("_rmsd", "").replace("_md", "")
     target_id = sanitize_target_id(target_id)
@@ -1775,13 +1929,21 @@ def export_analysis_csv(
 
     if rmsd_file.exists():
         x_time, y_prot, meta = parse_xvg_with_meta(rmsd_file)
-        if "ps" in meta.get("xaxis_label", "").lower() or (x_time and max(x_time) > 1000 and "ns" not in meta.get("xaxis_label", "").lower()):
+        if "ps" in meta.get("xaxis_label", "").lower() or (
+            x_time
+            and max(x_time) > 1000
+            and "ns" not in meta.get("xaxis_label", "").lower()
+        ):
             x_time = [t / 1000.0 for t in x_time]
 
         y_lig_map = {}
         if rmsd_lig_file.exists():
             x_l, y_l, meta_l = parse_xvg_with_meta(rmsd_lig_file)
-            if "ps" in meta_l.get("xaxis_label", "").lower() or (x_l and max(x_l) > 1000 and "ns" not in meta_l.get("xaxis_label", "").lower()):
+            if "ps" in meta_l.get("xaxis_label", "").lower() or (
+                x_l
+                and max(x_l) > 1000
+                and "ns" not in meta_l.get("xaxis_label", "").lower()
+            ):
                 x_l = [t / 1000.0 for t in x_l]
             for xl, yl in zip(x_l, y_l):
                 y_lig_map[round(xl, 3)] = yl
@@ -1817,7 +1979,11 @@ def export_analysis_csv(
 
     if hbond_file.exists():
         x_time, y_hb, meta = parse_xvg_with_meta(hbond_file)
-        if "ps" in meta.get("xaxis_label", "").lower() or (x_time and max(x_time) > 1000 and "ns" not in meta.get("xaxis_label", "").lower()):
+        if "ps" in meta.get("xaxis_label", "").lower() or (
+            x_time
+            and max(x_time) > 1000
+            and "ns" not in meta.get("xaxis_label", "").lower()
+        ):
             x_time = [t / 1000.0 for t in x_time]
         hbond_csv_path = working_dir / f"{prefix}hbond.csv"
         with open(hbond_csv_path, "w", encoding="utf-8") as f:
@@ -1835,7 +2001,11 @@ def export_analysis_csv(
     if gyrate_file.exists():
         try:
             x_time, y_dict, meta = parse_xvg_multicolumn(gyrate_file)
-            if "ps" in meta.get("xaxis_label", "").lower() or (x_time and max(x_time) > 1000 and "ns" not in meta.get("xaxis_label", "").lower()):
+            if "ps" in meta.get("xaxis_label", "").lower() or (
+                x_time
+                and max(x_time) > 1000
+                and "ns" not in meta.get("xaxis_label", "").lower()
+            ):
                 x_time = [t / 1000.0 for t in x_time]
             headers = ["Time_ns"] + [k.replace(" ", "_") + "_nm" for k in y_dict.keys()]
             gyrate_csv_path = working_dir / f"{prefix}gyrate.csv"
@@ -1843,7 +2013,10 @@ def export_analysis_csv(
                 f.write(",".join(headers) + "\n")
                 keys = list(y_dict.keys())
                 for idx, xt in enumerate(x_time):
-                    row_vals = [f"{xt:.3f}"] + [f"{y_dict[k][idx]:.4f}" if idx < len(y_dict[k]) else "" for k in keys]
+                    row_vals = [f"{xt:.3f}"] + [
+                        f"{y_dict[k][idx]:.4f}" if idx < len(y_dict[k]) else ""
+                        for k in keys
+                    ]
                     f.write(",".join(row_vals) + "\n")
             shutil.copy2(gyrate_csv_path, working_dir / "gyrate.csv")
             exported_csvs["gyrate"] = gyrate_csv_path
@@ -1858,15 +2031,24 @@ def export_analysis_csv(
     if sasa_file.exists():
         try:
             x_time, y_dict, meta = parse_xvg_multicolumn(sasa_file)
-            if "ps" in meta.get("xaxis_label", "").lower() or (x_time and max(x_time) > 1000 and "ns" not in meta.get("xaxis_label", "").lower()):
+            if "ps" in meta.get("xaxis_label", "").lower() or (
+                x_time
+                and max(x_time) > 1000
+                and "ns" not in meta.get("xaxis_label", "").lower()
+            ):
                 x_time = [t / 1000.0 for t in x_time]
-            headers = ["Time_ns"] + [k.replace(" ", "_") + "_nm2" for k in y_dict.keys()]
+            headers = ["Time_ns"] + [
+                k.replace(" ", "_") + "_nm2" for k in y_dict.keys()
+            ]
             sasa_csv_path = working_dir / f"{prefix}sasa.csv"
             with open(sasa_csv_path, "w", encoding="utf-8") as f:
                 f.write(",".join(headers) + "\n")
                 keys = list(y_dict.keys())
                 for idx, xt in enumerate(x_time):
-                    row_vals = [f"{xt:.3f}"] + [f"{y_dict[k][idx]:.4f}" if idx < len(y_dict[k]) else "" for k in keys]
+                    row_vals = [f"{xt:.3f}"] + [
+                        f"{y_dict[k][idx]:.4f}" if idx < len(y_dict[k]) else ""
+                        for k in keys
+                    ]
                     f.write(",".join(row_vals) + "\n")
             shutil.copy2(sasa_csv_path, working_dir / "sasa.csv")
             exported_csvs["sasa"] = sasa_csv_path
@@ -1908,7 +2090,9 @@ def export_analysis_csv(
                 with open(occ_csv_path, "w", encoding="utf-8") as f:
                     f.write("Donor,Acceptor,Occupancy_Percent,Classification\n")
                     for row in occ_data:
-                        f.write(f'"{row.get("donor", "")}","{row.get("acceptor", "")}",{row.get("occupancy_percent", 0.0):.2f},"{row.get("classification", "")}"\n')
+                        f.write(
+                            f'"{row.get("donor", "")}","{row.get("acceptor", "")}",{row.get("occupancy_percent", 0.0):.2f},"{row.get("classification", "")}"\n'
+                        )
                 shutil.copy2(occ_csv_path, working_dir / "hbond_occupancy.csv")
                 exported_csvs["hbond_occupancy"] = occ_csv_path
         except Exception:
@@ -1927,7 +2111,9 @@ def export_analysis_csv(
                 with open(occ_csv_path, "w", encoding="utf-8") as f:
                     f.write("Donor,Acceptor,Occupancy_Percent,Classification\n")
                     for row in occ_data:
-                        f.write(f'"{row.get("donor", "")}","{row.get("acceptor", "")}",{row.get("occupancy_percent", 0.0):.2f},"{row.get("classification", "")}"\n')
+                        f.write(
+                            f'"{row.get("donor", "")}","{row.get("acceptor", "")}",{row.get("occupancy_percent", 0.0):.2f},"{row.get("classification", "")}"\n'
+                        )
                 exported_csvs["hbond_occupancy"] = occ_csv_path
         except Exception:
             pass
@@ -2051,9 +2237,9 @@ def _ensure_gmx_mmpbsa_patched() -> None:
     """
     # Patch 1: Suporte multicadeia CYS em make_top.py
     try:
-        import GMXMMPBSA.make_top as mt
+        import GMXMMPBSA.make_top as mt  # type: ignore
 
-        make_top_path = Path(mt.__file__)
+        make_top_path = Path(mt.__file__)  # type: ignore
         if make_top_path.exists():
             with open(make_top_path, "r", encoding="utf-8") as f:
                 code = f.read()
@@ -2081,9 +2267,9 @@ def _ensure_gmx_mmpbsa_patched() -> None:
 
     # Patch 2: Remoção segura de arquivos em utils.py para evitar FileNotFoundError em MPI concorrente
     try:
-        import GMXMMPBSA.utils as mu
+        import GMXMMPBSA.utils as mu  # type: ignore
 
-        utils_path = Path(mu.__file__)
+        utils_path = Path(mu.__file__)  # type: ignore
         if utils_path.exists():
             with open(utils_path, "r", encoding="utf-8") as f:
                 code_u = f.read()
@@ -2096,7 +2282,10 @@ def _ensure_gmx_mmpbsa_patched() -> None:
                     "            except OSError:\n"
                     "                pass"
                 )
-                if target_str in code_u and "try:" not in code_u.split("def remove(")[1].split("def ")[0]:
+                if (
+                    target_str in code_u
+                    and "try:" not in code_u.split("def remove(")[1].split("def ")[0]
+                ):
                     code_u = code_u.replace(target_str, safe_str)
                     with open(utils_path, "w", encoding="utf-8") as f:
                         f.write(code_u)
@@ -2193,7 +2382,7 @@ def _ensure_ligand_mol2(working_dir: Path, lig_idx: int) -> Optional[Path]:
             for ext in ["*.sdf", "*.mol2", "*.pdbqt"]:
                 for parent_lig in working_dir.parent.glob(ext):
                     try:
-                        from docking.md_prep import export_ligand_pdb
+                        from docking.md_prep import export_ligand_pdb  # type: ignore
 
                         export_ligand_pdb(parent_lig, working_dir)
                         break
@@ -2252,7 +2441,9 @@ def calculate_mmpbsa(
     if not target_id:
         target_id = sanitize_target_id(working_dir.name)
         if target_id.lower() in ("md_files", "screening", "data"):
-            candidates = list(working_dir.glob("*_md.tpr")) or list(working_dir.glob("*_md_fit.xtc"))
+            candidates = list(working_dir.glob("*_md.tpr")) or list(
+                working_dir.glob("*_md_fit.xtc")
+            )
             if candidates:
                 target_id = candidates[0].stem.replace("_md_fit", "").replace("_md", "")
     target_id = sanitize_target_id(target_id)
@@ -2275,36 +2466,54 @@ def calculate_mmpbsa(
         dat_output = working_dir / "FINAL_RESULTS_MMPBSA.dat"
 
     decomp_dat_output = working_dir / f"{prefix}FINAL_DECOMP_MMPBSA.dat"
-    if not decomp_dat_output.exists() and (working_dir / "FINAL_DECOMP_MMPBSA.dat").exists():
+    if (
+        not decomp_dat_output.exists()
+        and (working_dir / "FINAL_DECOMP_MMPBSA.dat").exists()
+    ):
         decomp_dat_output = working_dir / "FINAL_DECOMP_MMPBSA.dat"
 
     if not tpr_file.exists():
-        raise FileNotFoundError(f"Arquivo '{tpr_file.name}' não encontrado em: {working_dir}")
+        raise FileNotFoundError(
+            f"Arquivo '{tpr_file.name}' não encontrado em: {working_dir}"
+        )
     if not fit_xtc.exists():
         raise FileNotFoundError(
             f"Trajetória corrigida '{fit_xtc.name}' não encontrada em: {working_dir}. "
             "Execute fix_pbc antes de calcular o MM-PBSA."
         )
     if not index_file.exists():
-        raise FileNotFoundError(f"Arquivo '{index_file.name}' não encontrado em: {working_dir}")
+        raise FileNotFoundError(
+            f"Arquivo '{index_file.name}' não encontrado em: {working_dir}"
+        )
 
     # Reutilização imediata de cálculos já concluídos com sucesso (evita reexecução desnecessária de ~1h)
     if not force and dat_output.exists() and dat_output.stat().st_size > 0:
         existing_summary = parse_mmpbsa_dat(dat_output)
-        if existing_summary.get("energies", {}).get("delta_g_binding", {}).get("mean", 0.0) != 0.0:
+        if (
+            existing_summary.get("energies", {})
+            .get("delta_g_binding", {})
+            .get("mean", 0.0)
+            != 0.0
+        ):
             decomp_data = []
             if decomp_dat_output.exists() and decomp_dat_output.stat().st_size > 0:
                 decomp_data = parse_mmpbsa_decomp(decomp_dat_output)
             if not decomp_data and dat_output.exists():
                 decomp_data = parse_mmpbsa_decomp(dat_output)
 
-            existing_summary["thermodynamic_window"] = "60 - 100 ns (Últimos 40% - Estado Estacionário)"
-            existing_summary["protocol"] = "Dupla Escala Temporal (MM-PBSA 60-100 ns / Trajetória 0-100 ns)"
+            existing_summary["thermodynamic_window"] = (
+                "60 - 100 ns (Últimos 40% - Estado Estacionário)"
+            )
+            existing_summary["protocol"] = (
+                "Dupla Escala Temporal (MM-PBSA 60-100 ns / Trajetória 0-100 ns)"
+            )
             existing_summary["raw_output_file"] = dat_output.name
 
             if decomp_data:
                 existing_summary["per_residue_decomposition"] = decomp_data
-                existing_summary["hotspot_residues"] = [r for r in decomp_data if r["total"] < 0][:10]
+                existing_summary["hotspot_residues"] = [
+                    r for r in decomp_data if r["total"] < 0
+                ][:10]
                 plot_mmpbsa_decomp(decomp_data, working_dir, target_id=target_id)
 
             export_analysis_csv(working_dir, target_id=target_id)
@@ -2325,7 +2534,12 @@ def calculate_mmpbsa(
 
     # 1. Identificação do número de frames e cálculo da janela de equilíbrio (Últimos 40%)
     total_frames = None
-    for xvg_name in [f"{prefix}rmsd.xvg", "rmsd.xvg", f"{prefix}gyrate.xvg", "gyrate.xvg"]:
+    for xvg_name in [
+        f"{prefix}rmsd.xvg",
+        "rmsd.xvg",
+        f"{prefix}gyrate.xvg",
+        "gyrate.xvg",
+    ]:
         xvg_file = working_dir / xvg_name
         if xvg_file.exists():
             try:
@@ -2431,18 +2645,11 @@ print_res="within 6.0",
     ligand_mol2 = _ensure_ligand_mol2(working_dir, lig_idx)
 
     # 5. Execução do gmx_MMPBSA
-    cmd_mmpbsa = []
-    mpirun_bin = find_executable("mpirun")
-    if mpirun_bin:
-        num_cores = max(1, min(8, (os.cpu_count() or 4) - 1))
-        if num_cores > 1:
-            cmd_mmpbsa.extend([mpirun_bin, "-np", str(num_cores)])
-
     out_dat_name = f"{prefix}FINAL_RESULTS_MMPBSA.dat"
     out_decomp_name = f"{prefix}FINAL_DECOMP_MMPBSA.dat"
     out_csv_name = f"{prefix}FINAL_RESULTS_MMPBSA.csv"
 
-    cmd_mmpbsa.extend([
+    cmd_mmpbsa = [
         mmpbsa_bin,
         "-O",
         "-nogui",
@@ -2463,7 +2670,7 @@ print_res="within 6.0",
         out_decomp_name,
         "-eo",
         out_csv_name,
-    ])
+    ]
 
     if ligand_mol2 and ligand_mol2.exists():
         try:
@@ -2496,7 +2703,12 @@ print_res="within 6.0",
         is_successful = False
         if final_dat.exists() and final_dat.stat().st_size > 0:
             parsed_test = parse_mmpbsa_dat(final_dat)
-            if parsed_test.get("energies", {}).get("delta_g_binding", {}).get("mean", 0.0) != 0.0:
+            if (
+                parsed_test.get("energies", {})
+                .get("delta_g_binding", {})
+                .get("mean", 0.0)
+                != 0.0
+            ):
                 is_successful = True
 
         if not is_successful and result.returncode != 0:
@@ -2524,13 +2736,17 @@ print_res="within 6.0",
 
     # 6. Parse dos resultados globais e decomposição por resíduo
     summary_data = parse_mmpbsa_dat(final_dat)
-    summary_data["thermodynamic_window"] = "60 - 100 ns (Últimos 40% - Estado Estacionário)"
+    summary_data["thermodynamic_window"] = (
+        "60 - 100 ns (Últimos 40% - Estado Estacionário)"
+    )
     summary_data["startframe"] = startframe
     summary_data["endframe"] = endframe
     summary_data["interval"] = interval
     summary_data["total_frames_estimated"] = total_frames
     summary_data["frames_analyzed"] = max(1, (endframe - startframe + 1) // interval)
-    summary_data["protocol"] = "Dupla Escala Temporal (MM-PBSA 60-100 ns / Trajetória 0-100 ns)"
+    summary_data["protocol"] = (
+        "Dupla Escala Temporal (MM-PBSA 60-100 ns / Trajetória 0-100 ns)"
+    )
     summary_data["raw_output_file"] = out_dat_name
 
     decomp_data = []
@@ -2541,7 +2757,9 @@ print_res="within 6.0",
 
     if decomp_data:
         summary_data["per_residue_decomposition"] = decomp_data
-        summary_data["hotspot_residues"] = [r for r in decomp_data if r["total"] < 0][:10]
+        summary_data["hotspot_residues"] = [r for r in decomp_data if r["total"] < 0][
+            :10
+        ]
         plot_mmpbsa_decomp(decomp_data, working_dir, target_id=target_id)
 
     export_analysis_csv(working_dir, target_id=target_id)
