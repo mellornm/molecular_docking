@@ -4,15 +4,18 @@ from typing import Any, Dict, List, Optional, Set
 
 
 def _find_structure_file(work_dir: Path) -> Optional[Path]:
-    """Busca o arquivo de estrutura (md_clean.gro prioritário, complex.pdb, complex.gro ou md.gro) no work_dir ou subdiretórios."""
+    """Busca o arquivo de estrutura (md_clean.gro prioritário, complex.pdb, complex.gro ou md.gro) no work_dir ou subdiretórios (suporta prefixos)."""
     candidates = ["md_clean.gro", "complex.pdb", "complex.gro", "md.gro"]
     for cand in candidates:
         direct = work_dir / cand
         if direct.exists():
             return direct
+        prefixed = list(work_dir.glob(f"*_{cand}"))
+        if prefixed:
+            return prefixed[0]
     # Busca recursiva rasa (1 nível)
     for cand in candidates:
-        matches = list(work_dir.glob(f"*/{cand}"))
+        matches = list(work_dir.glob(f"*/{cand}")) or list(work_dir.glob(f"*/*_{cand}"))
         if matches:
             return matches[0]
     # Busca em diretório md_files adjacente/pai
@@ -23,6 +26,9 @@ def _find_structure_file(work_dir: Path) -> Optional[Path]:
                 cand_file = candidate_md / cand
                 if cand_file.exists():
                     return cand_file
+                prefixed = list(candidate_md.glob(f"*_{cand}"))
+                if prefixed:
+                    return prefixed[0]
     return None
 
 
@@ -54,7 +60,7 @@ def generate_pymol_script(work_dir: Path) -> Path:
     # Leitura do interactions.json (se existir)
     interactions_file = work_dir / "interactions.json"
     if not interactions_file.exists():
-        matches = list(work_dir.glob("*/interactions.json"))
+        matches = list(work_dir.glob("*_interactions.json")) or list(work_dir.glob("*/interactions.json")) or list(work_dir.glob("*/*_interactions.json"))
         if matches:
             interactions_file = matches[0]
 

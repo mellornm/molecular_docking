@@ -23,7 +23,13 @@ except ImportError:
     except Exception:
         pass
 
-from docking.md_prep import DependencyError, SimulationPrepError, find_executable
+from docking.md_prep import (
+    DependencyError,
+    SimulationPrepError,
+    find_executable,
+    sanitize_target_id,
+    verify_tpr_consistency,
+)
 
 
 def get_index_groups(index_file: Path) -> List[str]:
@@ -106,34 +112,237 @@ def identify_complex_groups(groups_list: List[str]) -> Tuple[str, str, int, int]
     return prot_name, lig_name, prot_idx, lig_idx
 
 
-def compile_production_tpr(working_dir: Path) -> Path:
+def export_cluster_package(
+    working_dir: Path,
+    target_id: Optional[str] = None,
+    output_export_dir: Optional[Path] = None,
+) -> Path:
     """
-    Compila o arquivo de entrada binário para a produção da Dinâmica Molecular (md.tpr)
+    Gera um diretório autocontido e isolado para execução remota/manual de Dinâmica Molecular:
+    cluster_export/<target_id>/
+    ├── <target_id>_md.tpr
+    ├── run_local.sh (script executável pré-configurado para tmux/nohup)
+    └── README.md (guia rápido de execução e monitoramento)
+    """
+    working_dir = Path(working_dir)
+    if not target_id:
+        target_id = sanitize_target_id(working_dir.name)
+        if target_id.lower() in ("md_files", "screening", "data"):
+            tpr_candidates = list(working_dir.glob("*_md.tpr"))
+            if tpr_candidates:
+                target_id = tpr_candidates[0].stem.replace("_md", "")
+    target_id = sanitize_target_id(target_id)
+    prefix = f"{target_id}_"
+
+    # Localiza o TPR de produção
+    tpr_source = working_dir / f"{prefix}md.tpr"
+    if not tpr_source.exists():
+        tpr_source = working_dir / "md.tpr"
+    if not tpr_source.exists():
+        raise FileNotFoundError(
+            f"Arquivo TPR de produção não encontrado em {working_dir}. "
+            "Compile o TPR primeiro via compile_production_tpr."
+        )
+
+    # Valida integridade do TPR
+    verify_tpr_consistency(tpr_source)
+
+    if output_export_dir is None:
+        project_root = Path(__file__).resolve().parent.parent.parent
+        export_root = project_root / "cluster_export"
+    else:
+        export_root = Path(output_export_dir)
+
+    target_export_dir = export_root / target_id
+    target_export_dir.mkdir(parents=True, exist_ok=True)
+
+    # 1. Copia o TPR
+    dest_tpr = target_export_dir / f"{prefix}md.tpr"
+    shutil.copy2(tpr_source, dest_tpr)
+
+    # 2. Gera o script executável run_local.sh
+    run_script_content = f"""#!/usr/bin/env bash
+# ==============================================================================
+# Script de Execução Autônoma de Dinâmica Molecular (GROMACS)
+# Receptor / Alvo: {target_id}
+# Arquivo TPR: {dest_tpr.name}
+# ==============================================================================
+
+set -euo pipefail
+
+TARGET="{target_id}"
+TPR_FILE="${{TARGET}}_md.tpr"
+DEFFNM="${{TARGET}}_md"
+
+echo "======================================================================"
+echo "  Iniciando Produção de Dinâmica Molecular: ${{TARGET}}"
+echo "  Data / Hora de Início: $(date)"
+echo "  Arquivo TPR: ${{TPR_FILE}}"
+echo "  Diretório Atual: $(pwd)"
+echo "======================================================================"
+
+# 1. Identificação do binário do GROMACS
+if command -v gmx &> /dev/null; then
+    GMX_BIN="gmx"
+elif [ -f "$HOME/miniforge3/envs/bioinfo/bin/gmx" ]; then
+    GMX_BIN="$HOME/miniforge3/envs/bioinfo/bin/gmx"
+elif [ -f "$HOME/miniconda3/envs/bioinfo/bin/gmx" ]; then
+    GMX_BIN="$HOME/miniconda3/envs/bioinfo/bin/gmx"
+else
+    echo "ERRO: Executável 'gmx' (GROMACS) não encontrado no PATH nem no Conda bioinfo." >&2
+    exit 1
+fi
+
+echo "-> Executável GROMACS: ${{GMX_BIN}}"
+
+# 2. Verificação do arquivo TPR
+if [ ! -f "${{TPR_FILE}}" ]; then
+    echo "ERRO: Arquivo '${{TPR_FILE}}' não encontrado no diretório atual!" >&2
+    exit 1
+fi
+
+# 3. Verificação de retomada automática via Checkpoint (cpi)
+CPT_FLAG=""
+if [ -f "${{DEFFNM}}.cpt" ]; then
+    echo "-> Checkpoint prévio detectado (${{DEFFNM}}.cpt). Retomando simulação..."
+    CPT_FLAG="-cpi ${{DEFFNM}}.cpt -append"
+fi
+
+# 4. Execução do mdrun
+echo "-> Disparando mdrun com prefixo exclusivo '${{DEFFNM}}'..."
+${{GMX_BIN}} mdrun -v \\
+    -s "${{TPR_FILE}}" \\
+    -deffnm "${{DEFFNM}}" \\
+    ${{CPT_FLAG}}
+
+echo "======================================================================"
+echo "  Dinâmica Molecular Finalizada com Sucesso: ${{TARGET}}"
+echo "  Data / Hora de Término: $(date)"
+echo "  Arquivos Gerados: ${{DEFFNM}}.xtc, ${{DEFFNM}}.edr, ${{DEFFNM}}.gro, ${{DEFFNM}}.log"
+echo "======================================================================"
+"""
+
+    script_path = target_export_dir / "run_local.sh"
+    with open(script_path, "w", encoding="utf-8", newline="\n") as f:
+        f.write(run_script_content)
+
+    try:
+        os.chmod(script_path, 0o755)
+    except Exception:
+        pass
+
+    # 3. Gera README.md com instruções de transferência e execução
+    readme_content = f"""# Pacote de Execução Autônoma - Alvo: {target_id}
+
+Este diretório contém os arquivos necessários para transferir e executar a simulação de Dinâmica Molecular (100 ns) em um servidor remoto, estação de trabalho ou GPU cluster sem depender de gerenciadores de fila (Slurm/PBS).
+
+---
+
+## 📦 Arquivos do Pacote
+* `{dest_tpr.name}`: Arquivo binário de entrada da simulação (compilado e verificado).
+* `run_local.sh`: Script bash otimizado para execução com tolerância a falhas e retomada via checkpoint.
+
+---
+
+## 🚀 Como Executar no Servidor Remoto
+
+### 1. Transferir para o Servidor (SSH / SCP):
+```bash
+scp -r cluster_export/{target_id} usuario@servidor.remoto:/caminho/de/destino/
+```
+
+### 2. Acessar o Diretório:
+```bash
+cd /caminho/de/destino/{target_id}
+```
+
+### 3. Disparar a Simulação:
+
+#### Opção A (Recomendado - via tmux):
+```bash
+tmux new -s md_{target_id}
+bash run_local.sh
+# Pressione Ctrl+B e depois D para desanexar do terminal
+```
+
+#### Opção B (via nohup em background):
+```bash
+nohup bash run_local.sh > simulation_{target_id}.log 2>&1 &
+```
+
+### 4. Acompanhar o Progresso:
+```bash
+tail -f {prefix}md.log
+```
+
+---
+
+## 📥 Pós-Simulação
+Após o término, copie de volta os arquivos `{prefix}md.xtc` e `{prefix}md.tpr` para `data/md_files/{target_id}/` e execute a Opção 9 do pipeline para análise, gráficos e MM-PBSA.
+"""
+
+    readme_path = target_export_dir / "README.md"
+    with open(readme_path, "w", encoding="utf-8") as f:
+        f.write(readme_content)
+
+    return target_export_dir
+
+
+def compile_production_tpr(
+    working_dir: Path, target_id: Optional[str] = None
+) -> Path:
+    """
+    Compila o arquivo de entrada binário para a produção da Dinâmica Molecular (<target_id>_md.tpr)
     usando o comando 'gmx grompp' a partir de npt.gro, npt.cpt, topol.top, index.ndx e md.mdp.
+
+    Aplica:
+    1. Isolamento estrito com prefixo do alvo.
+    2. Deleção prévia de TPR antigo para evitar reutilização indevida.
+    3. Controle estrito de saída do grompp (código 0).
+    4. Checagem de consistência pós-geração via gmx check.
+    5. Empacotamento automático para execução remota em cluster_export/<target_id>/.
     """
     working_dir = Path(working_dir)
     if not working_dir.exists():
         raise FileNotFoundError(f"Diretório de trabalho não encontrado: {working_dir}")
 
-    npt_gro = working_dir / "npt.gro"
-    npt_cpt = working_dir / "npt.cpt"
-    topol_top = working_dir / "topol.top"
-    index_ndx = working_dir / "index.ndx"
+    # Identificação do alvo
+    if not target_id:
+        target_id = sanitize_target_id(working_dir.name)
+        if target_id.lower() in ("md_files", "screening", "data"):
+            gro_files = list(working_dir.glob("*_npt.gro")) or list(working_dir.glob("*_em.gro"))
+            if gro_files:
+                target_id = gro_files[0].stem.replace("_npt", "").replace("_em", "")
+    target_id = sanitize_target_id(target_id)
+    prefix = f"{target_id}_"
 
+    npt_gro = working_dir / f"{prefix}npt.gro"
+    if not npt_gro.exists():
+        npt_gro = working_dir / "npt.gro"
     if not npt_gro.exists():
         raise FileNotFoundError(
             f"Arquivo de equilíbrio 'npt.gro' não encontrado no diretório: {working_dir}"
         )
+
+    npt_cpt = working_dir / f"{prefix}npt.cpt"
+    if not npt_cpt.exists():
+        npt_cpt = working_dir / "npt.cpt"
+
+    topol_top = working_dir / f"{prefix}topol.top"
+    if not topol_top.exists():
+        topol_top = working_dir / "topol.top"
     if not topol_top.exists():
         raise FileNotFoundError(
             f"Arquivo de topologia 'topol.top' não encontrado no diretório: {working_dir}"
         )
 
+    index_ndx = working_dir / f"{prefix}index.ndx"
+    if not index_ndx.exists():
+        index_ndx = working_dir / "index.ndx"
+
     gmx_bin = find_executable("gmx")
     if not gmx_bin:
-        raise DependencyError(
-            "O executável 'gmx' (GROMACS) não foi encontrado no PATH."
-        )
+        raise DependencyError("O executável 'gmx' (GROMACS) não foi encontrado no PATH.")
 
     # Resolução do template md.mdp
     project_root = Path(__file__).resolve().parent.parent.parent
@@ -143,6 +352,11 @@ def compile_production_tpr(working_dir: Path) -> Path:
         if not md_mdp.exists():
             raise FileNotFoundError("Arquivo template md.mdp não encontrado.")
 
+    # Deleção prévia de TPRs antigos para impedir reaproveitamento indevido
+    target_tpr = working_dir / f"{prefix}md.tpr"
+    target_tpr.unlink(missing_ok=True)
+    (working_dir / "md.tpr").unlink(missing_ok=True)
+
     # 1. Compilação do arquivo de produção (grompp)
     cmd_grompp = [
         gmx_bin,
@@ -150,19 +364,21 @@ def compile_production_tpr(working_dir: Path) -> Path:
         "-f",
         str(md_mdp),
         "-c",
-        "npt.gro",
+        str(npt_gro.name),
         "-p",
-        "topol.top",
+        str(topol_top.name),
         "-o",
-        "md.tpr",
+        f"{prefix}md.tpr",
     ]
     if npt_cpt.exists():
-        cmd_grompp.extend(["-t", "npt.cpt"])
+        cmd_grompp.extend(["-t", str(npt_cpt.name)])
     if index_ndx.exists():
-        cmd_grompp.extend(["-n", "index.ndx"])
+        cmd_grompp.extend(["-n", str(index_ndx.name)])
 
     try:
         env = os.environ.copy()
+        env.pop("PYTHONPATH", None)
+        env.pop("PYTHONHOME", None)
         exec_dir = str(Path(gmx_bin).parent)
         env["PATH"] = f"{exec_dir}{os.pathsep}{env.get('PATH', '')}"
 
@@ -184,14 +400,27 @@ def compile_production_tpr(working_dir: Path) -> Path:
             f"Falha ao executar a Compilação de Produção (grompp): {e}"
         )
 
-    md_tpr = working_dir / "md.tpr"
-    if not md_tpr.exists():
-        raise FileNotFoundError(f"Arquivo 'md.tpr' não foi gerado em: {working_dir}")
+    if not target_tpr.exists():
+        raise FileNotFoundError(f"Arquivo '{target_tpr.name}' não foi gerado em: {working_dir}")
 
-    return md_tpr
+    # Espelho md.tpr
+    shutil.copy2(target_tpr, working_dir / "md.tpr")
+
+    # Checagem de consistência pós-geração
+    verify_tpr_consistency(target_tpr)
+
+    # Empacotamento automático para exportação de cluster
+    try:
+        export_cluster_package(working_dir, target_id=target_id)
+    except Exception:
+        pass
+
+    return target_tpr
 
 
-def run_production_md(working_dir: Path):
+def run_production_md(
+    working_dir: Path, target_id: Optional[str] = None
+):
     """
     Compila e executa a etapa de Produção de Dinâmica Molecular no GROMACS.
     """
@@ -199,20 +428,30 @@ def run_production_md(working_dir: Path):
     if not working_dir.exists():
         raise FileNotFoundError(f"Diretório de trabalho não encontrado: {working_dir}")
 
+    # Identificação do alvo
+    if not target_id:
+        target_id = sanitize_target_id(working_dir.name)
+        if target_id.lower() in ("md_files", "screening", "data"):
+            gro_files = list(working_dir.glob("*_npt.gro")) or list(working_dir.glob("*_em.gro"))
+            if gro_files:
+                target_id = gro_files[0].stem.replace("_npt", "").replace("_em", "")
+    target_id = sanitize_target_id(target_id)
+    prefix = f"{target_id}_"
+
     gmx_bin = find_executable("gmx")
     if not gmx_bin:
-        raise DependencyError(
-            "O executável 'gmx' (GROMACS) não foi encontrado no PATH."
-        )
+        raise DependencyError("O executável 'gmx' (GROMACS) não foi encontrado no PATH.")
 
-    # 1. Compilação do arquivo de produção (grompp -> md.tpr)
-    compile_production_tpr(working_dir)
+    # 1. Compilação do arquivo de produção (grompp -> <target_id>_md.tpr)
+    compile_production_tpr(working_dir, target_id=target_id)
 
     # 2. Execução da simulação de produção (mdrun)
-    cmd_mdrun = [gmx_bin, "mdrun", "-v", "-deffnm", "md"]
+    cmd_mdrun = [gmx_bin, "mdrun", "-v", "-deffnm", f"{prefix}md"]
 
     try:
         env = os.environ.copy()
+        env.pop("PYTHONPATH", None)
+        env.pop("PYTHONHOME", None)
         exec_dir = str(Path(gmx_bin).parent)
         env["PATH"] = f"{exec_dir}{os.pathsep}{env.get('PATH', '')}"
 
@@ -227,7 +466,6 @@ def run_production_md(working_dir: Path):
             universal_newlines=True,
         )
 
-        # Captura e imprime o output em tempo real
         for line in process.stdout:  # type: ignore
             sys.stdout.write(line)
             sys.stdout.flush()
@@ -239,6 +477,13 @@ def run_production_md(working_dir: Path):
                 f"Comando: {' '.join(cmd_mdrun)}\n"
                 f"Código de retorno: {process.returncode}"
             )
+
+        # Espelhos para compatibilidade
+        if (working_dir / f"{prefix}md.xtc").exists():
+            shutil.copy2(working_dir / f"{prefix}md.xtc", working_dir / "md.xtc")
+        if (working_dir / f"{prefix}md.gro").exists():
+            shutil.copy2(working_dir / f"{prefix}md.gro", working_dir / "md.gro")
+
     except Exception as e:
         if isinstance(e, (SimulationPrepError, DependencyError)):
             raise e
@@ -247,57 +492,80 @@ def run_production_md(working_dir: Path):
         )
 
 
-def fix_pbc(working_dir: Path, force: bool = False) -> Path:
+def fix_pbc(
+    working_dir: Path, target_id: Optional[str] = None, force: bool = False
+) -> Path:
     """
     Executa o tratamento completo e automatizado de Condições Periódicas de Contorno (PBC)
     e remoção de movimentos de corpo rígido (fit rot+trans) via GROMACS (gmx trjconv):
 
     1. Etapa 1 - Centralização e Correção de PBC:
-       gmx trjconv -s md.tpr -f md.xtc -o md_center.xtc -pbc mol -center
+       gmx trjconv -s <target_id>_md.tpr -f <target_id>_md.xtc -o <target_id>_md_center.xtc -pbc mol -center
        (Input stdin: '1\\n0\\n' -> Protein para centralizar, System para salvar)
 
     2. Etapa 2 - Ajuste de Rotação e Translação (Fit de Mínimos Quadrados):
-       gmx trjconv -s md.tpr -f md_center.xtc -o md_fit.xtc -fit rot+trans
+       gmx trjconv -s <target_id>_md.tpr -f <target_id>_md_center.xtc -o <target_id>_md_fit.xtc -fit rot+trans
        (Input stdin: '4\\n0\\n' -> Backbone para fit de RMSD, System para salvar)
 
     3. Etapa 3 - Estrutura Estática Limpa para PyMOL:
-       gmx trjconv -s md.tpr -f md.gro -o md_clean.gro -pbc mol -center
+       gmx trjconv -s <target_id>_md.tpr -f <target_id>_md.gro -o <target_id>_md_clean.gro -pbc mol -center
        (Input stdin: '1\\n0\\n' -> Protein para centralizar, System para salvar)
 
-    Se 'md_fit.xtc' e 'md_clean.gro' já existirem no diretório e force=False, reutiliza os arquivos existentes.
     Retorna o caminho do arquivo de trajetória corrigida md_fit.xtc.
     """
     working_dir = Path(working_dir)
     if not working_dir.exists():
         raise FileNotFoundError(f"Diretório de trabalho não encontrado: {working_dir}")
 
-    md_fit_path = working_dir / "md_fit.xtc"
-    md_clean_path = working_dir / "md_clean.gro"
+    # Identificação do alvo
+    if not target_id:
+        target_id = sanitize_target_id(working_dir.name)
+        if target_id.lower() in ("md_files", "screening", "data"):
+            candidates = list(working_dir.glob("*_md.tpr")) or list(working_dir.glob("*_md.xtc"))
+            if candidates:
+                target_id = candidates[0].stem.replace("_md", "")
+    target_id = sanitize_target_id(target_id)
+    prefix = f"{target_id}_"
+
+    md_fit_path = working_dir / f"{prefix}md_fit.xtc"
+    md_clean_path = working_dir / f"{prefix}md_clean.gro"
 
     if not force and md_fit_path.exists() and md_clean_path.exists():
+        if not (working_dir / "md_fit.xtc").exists():
+            shutil.copy2(md_fit_path, working_dir / "md_fit.xtc")
+        if not (working_dir / "md_clean.gro").exists():
+            shutil.copy2(md_clean_path, working_dir / "md_clean.gro")
         return md_fit_path
 
-    tpr_file = working_dir / "md.tpr"
-    xtc_file = working_dir / "md.xtc"
+    if not force and (working_dir / "md_fit.xtc").exists() and (working_dir / "md_clean.gro").exists():
+        return working_dir / "md_fit.xtc"
+
+    tpr_file = working_dir / f"{prefix}md.tpr"
+    if not tpr_file.exists():
+        tpr_file = working_dir / "md.tpr"
+
+    xtc_file = working_dir / f"{prefix}md.xtc"
+    if not xtc_file.exists():
+        xtc_file = working_dir / "md.xtc"
 
     if not tpr_file.exists():
         raise FileNotFoundError(
-            f"Arquivo de topologia compilada 'md.tpr' não encontrado em: {working_dir}"
+            f"Arquivo de topologia compilada '{tpr_file.name}' não encontrado em: {working_dir}"
         )
     if not xtc_file.exists():
         raise FileNotFoundError(
-            f"Arquivo de trajetória de produção 'md.xtc' não encontrado em: {working_dir}"
+            f"Arquivo de trajetória de produção '{xtc_file.name}' não encontrado em: {working_dir}"
         )
 
     gmx_bin = find_executable("gmx")
     if not gmx_bin:
-        raise DependencyError(
-            "O executável 'gmx' (GROMACS) não foi encontrado no PATH."
-        )
+        raise DependencyError("O executável 'gmx' (GROMACS) não foi encontrado no PATH.")
 
     def run_trjconv_cmd(cmd: List[str], input_val: str, step_name: str):
         try:
             env = os.environ.copy()
+            env.pop("PYTHONPATH", None)
+            env.pop("PYTHONHOME", None)
             exec_dir = str(Path(gmx_bin).parent)
             env["PATH"] = f"{exec_dir}{os.pathsep}{env.get('PATH', '')}"
 
@@ -326,16 +594,16 @@ def fix_pbc(working_dir: Path, force: bool = False) -> Path:
             )
 
     # Etapa 1: Centralização da Proteína e Correção de Moléculas Quebradas em PBC
-    # Seleção de grupos: 1 (Protein para centralizar) e 0 (System para salvar)
+    center_xtc_name = f"{prefix}md_center.xtc"
     cmd_center = [
         gmx_bin,
         "trjconv",
         "-s",
-        "md.tpr",
+        str(tpr_file.name),
         "-f",
-        "md.xtc",
+        str(xtc_file.name),
         "-o",
-        "md_center.xtc",
+        center_xtc_name,
         "-pbc",
         "mol",
         "-center",
@@ -347,16 +615,16 @@ def fix_pbc(working_dir: Path, force: bool = False) -> Path:
     )
 
     # Etapa 2: Ajuste de Rotação e Translação (Fit de Mínimos Quadrados via Backbone)
-    # Seleção de grupos: 4 (Backbone para fit de RMSD) e 0 (System para salvar)
+    fit_xtc_name = f"{prefix}md_fit.xtc"
     cmd_fit = [
         gmx_bin,
         "trjconv",
         "-s",
-        "md.tpr",
+        str(tpr_file.name),
         "-f",
-        "md_center.xtc",
+        center_xtc_name,
         "-o",
-        "md_fit.xtc",
+        fit_xtc_name,
         "-fit",
         "rot+trans",
     ]
@@ -367,24 +635,29 @@ def fix_pbc(working_dir: Path, force: bool = False) -> Path:
     )
 
     # Etapa 3: Estrutura Estática Limpa para Visualização no PyMOL
-    # Seleção de grupos: 1 (Protein para centralizar) e 0 (System para salvar)
-    gro_candidates = ["md.gro", "npt.gro", "em.gro", "complex.gro"]
+    gro_candidates = [
+        f"{prefix}md.gro", "md.gro",
+        f"{prefix}npt.gro", "npt.gro",
+        f"{prefix}em.gro", "em.gro",
+        f"{prefix}complex.gro", "complex.gro"
+    ]
     gro_source = None
     for cand in gro_candidates:
         if (working_dir / cand).exists():
             gro_source = cand
             break
 
+    clean_gro_name = f"{prefix}md_clean.gro"
     if gro_source:
         cmd_clean_gro = [
             gmx_bin,
             "trjconv",
             "-s",
-            "md.tpr",
+            str(tpr_file.name),
             "-f",
             gro_source,
             "-o",
-            "md_clean.gro",
+            clean_gro_name,
             "-pbc",
             "mol",
             "-center",
@@ -395,53 +668,77 @@ def fix_pbc(working_dir: Path, force: bool = False) -> Path:
             step_name="Etapa 3 (Estrutura Estática Limpa para PyMOL - md_clean.gro)",
         )
 
-    if not md_fit_path.exists():
+    # Cria espelhos
+    if (working_dir / fit_xtc_name).exists():
+        shutil.copy2(working_dir / fit_xtc_name, working_dir / "md_fit.xtc")
+    if (working_dir / clean_gro_name).exists():
+        shutil.copy2(working_dir / clean_gro_name, working_dir / "md_clean.gro")
+
+    if not md_fit_path.exists() and not (working_dir / "md_fit.xtc").exists():
         raise FileNotFoundError(
             f"Arquivo de trajetória corrigida 'md_fit.xtc' não foi gerado em: {working_dir}"
         )
-    if not md_clean_path.exists():
-        raise FileNotFoundError(
-            f"Arquivo de estrutura estática limpa 'md_clean.gro' não foi gerado em: {working_dir}"
-        )
 
-    return md_fit_path
+    return md_fit_path if md_fit_path.exists() else working_dir / "md_fit.xtc"
 
 
-def analyze_trajectory(working_dir: Path):
+def analyze_trajectory(
+    working_dir: Path, target_id: Optional[str] = None
+):
     """
     Executa a análise quantitativa da trajetória de Dinâmica Molecular no GROMACS (Janela Completa: 0 - 100 ns):
-    1. RMSD do Backbone da Proteína e do Ligante (gmx rms -s md.tpr -f md_fit.xtc -o rmsd.xvg -tu ns)
-    2. RMSF por resíduo dos Carbonos Alfa (gmx rmsf -s md.tpr -f md_fit.xtc -o rmsf.xvg -res)
-    3. Monitoramento de Pontes de Hidrogênio Proteína-Ligante (gmx hbond -s md.tpr -f md_fit.xtc -num hbond.xvg -tu ns)
+    1. RMSD do Backbone da Proteína e do Ligante
+    2. RMSF por resíduo dos Carbonos Alfa
+    3. Monitoramento de Pontes de Hidrogênio Proteína-Ligante
+    4. Raio de Giro (Rg)
+    5. Área de Superfície Acessível ao Solvente (SASA)
+    6. Ocupação Temporal de Pontes de Hidrogênio
+    7. Agrupamento Conformacional (Clustering)
+    8. Exportação automatizada de todas as matrizes brutas em formato CSV para publicação.
 
-    Utiliza estritamente a trajetória ajustada e sem artefatos de PBC (md_fit.xtc).
+    Utiliza estritamente a trajetória ajustada e sem artefatos de PBC.
     """
     working_dir = Path(working_dir)
     if not working_dir.exists():
         raise FileNotFoundError(f"Diretório de trabalho não encontrado: {working_dir}")
 
-    tpr_file = working_dir / "md.tpr"
-    fit_xtc = working_dir / "md_fit.xtc"
+    # Identificação do alvo
+    if not target_id:
+        target_id = sanitize_target_id(working_dir.name)
+        if target_id.lower() in ("md_files", "screening", "data"):
+            candidates = list(working_dir.glob("*_md.tpr")) or list(working_dir.glob("*_md_fit.xtc"))
+            if candidates:
+                target_id = candidates[0].stem.replace("_md_fit", "").replace("_md", "")
+    target_id = sanitize_target_id(target_id)
+    prefix = f"{target_id}_"
+
+    tpr_file = working_dir / f"{prefix}md.tpr"
+    if not tpr_file.exists():
+        tpr_file = working_dir / "md.tpr"
+
+    fit_xtc = working_dir / f"{prefix}md_fit.xtc"
+    if not fit_xtc.exists():
+        fit_xtc = working_dir / "md_fit.xtc"
 
     if not tpr_file.exists():
         raise FileNotFoundError(
-            f"Arquivo 'md.tpr' não encontrado no diretório: {working_dir}"
+            f"Arquivo '{tpr_file.name}' não encontrado no diretório: {working_dir}"
         )
     if not fit_xtc.exists():
         raise FileNotFoundError(
-            f"Trajetória corrigida 'md_fit.xtc' não encontrada em: {working_dir}. "
+            f"Trajetória corrigida '{fit_xtc.name}' não encontrada em: {working_dir}. "
             "Certifique-se de executar o tratamento de PBC (fix_pbc) antes da análise."
         )
 
     gmx_bin = find_executable("gmx")
     if not gmx_bin:
-        raise DependencyError(
-            "O executável 'gmx' (GROMACS) não foi encontrado no PATH."
-        )
+        raise DependencyError("O executável 'gmx' (GROMACS) não foi encontrado no PATH.")
 
     def run_analysis_cmd(cmd: List[str], cwd: Path, input_val: str, step_name: str = ""):
         try:
             env = os.environ.copy()
+            env.pop("PYTHONPATH", None)
+            env.pop("PYTHONHOME", None)
             exec_dir = str(Path(gmx_bin).parent)
             env["PATH"] = f"{exec_dir}{os.pathsep}{env.get('PATH', '')}"
 
@@ -469,7 +766,10 @@ def analyze_trajectory(working_dir: Path):
                 f"Falha ao executar comando de análise ({step_name}): {e}"
             )
 
-    index_file = working_dir / "index.ndx"
+    index_file = working_dir / f"{prefix}index.ndx"
+    if not index_file.exists():
+        index_file = working_dir / "index.ndx"
+
     prot_name = "Protein"
     lig_name = "LIG"
     prot_idx = 1
@@ -479,36 +779,39 @@ def analyze_trajectory(working_dir: Path):
         prot_name, lig_name, prot_idx, lig_idx = identify_complex_groups(groups_list)
 
     # 1.1 RMSD do esqueleto da proteína (Backbone/Backbone -> 4 4)
+    rmsd_xvg = f"{prefix}rmsd.xvg"
     cmd_rmsd = [
         gmx_bin,
         "rms",
         "-s",
-        "md.tpr",
+        str(tpr_file.name),
         "-f",
-        "md_fit.xtc",
+        str(fit_xtc.name),
         "-o",
-        "rmsd.xvg",
+        rmsd_xvg,
         "-tu",
         "ns",
     ]
     run_analysis_cmd(cmd_rmsd, working_dir, "4\n4\n", "RMSD do esqueleto da proteína (Backbone)")
+    shutil.copy2(working_dir / rmsd_xvg, working_dir / "rmsd.xvg")
 
-    # 1.2 RMSD do Ligante no sítio ativo (Fit: Backbone 4, Calc: Ligand) para monitorar persistência e ausência de unbinding
+    # 1.2 RMSD do Ligante no sítio ativo (Fit: Backbone 4, Calc: Ligand)
     if index_file.exists() and lig_idx is not None:
         try:
+            rmsd_lig_xvg = f"{prefix}rmsd_lig.xvg"
             cmd_rmsd_lig = [
                 gmx_bin,
                 "rms",
                 "-s",
-                "md.tpr",
+                str(tpr_file.name),
                 "-f",
-                "md_fit.xtc",
+                str(fit_xtc.name),
                 "-o",
-                "rmsd_lig.xvg",
+                rmsd_lig_xvg,
                 "-tu",
                 "ns",
                 "-n",
-                "index.ndx",
+                str(index_file.name),
             ]
             run_analysis_cmd(
                 cmd_rmsd_lig,
@@ -516,42 +819,46 @@ def analyze_trajectory(working_dir: Path):
                 f"4\n{lig_idx}\n",
                 f"RMSD do ligante ({lig_name}) no sítio ativo",
             )
+            shutil.copy2(working_dir / rmsd_lig_xvg, working_dir / "rmsd_lig.xvg")
         except Exception:
             pass
 
     # 2. RMSF por resíduo dos Carbonos Alfa (C-alpha -> 3)
+    rmsf_xvg = f"{prefix}rmsf.xvg"
     cmd_rmsf = [
         gmx_bin,
         "rmsf",
         "-s",
-        "md.tpr",
+        str(tpr_file.name),
         "-f",
-        "md_fit.xtc",
+        str(fit_xtc.name),
         "-o",
-        "rmsf.xvg",
+        rmsf_xvg,
         "-res",
     ]
     run_analysis_cmd(cmd_rmsf, working_dir, "3\n", "RMSF por resíduo (C-alpha)")
+    shutil.copy2(working_dir / rmsf_xvg, working_dir / "rmsf.xvg")
 
     # 3. Pontes de hidrogênio entre Proteína e Ligante ao longo dos 100 ns
+    hbond_xvg = f"{prefix}hbond.xvg"
     cmd_hbond = [
         gmx_bin,
         "hbond",
         "-s",
-        "md.tpr",
+        str(tpr_file.name),
         "-f",
-        "md_fit.xtc",
+        str(fit_xtc.name),
         "-num",
-        "hbond.xvg",
+        hbond_xvg,
         "-hbn",
-        "hbond.ndx",
+        f"{prefix}hbond.ndx",
         "-logfile",
-        "hbond.log",
+        f"{prefix}hbond.log",
         "-tu",
         "ns",
     ]
     if index_file.exists():
-        cmd_hbond.extend(["-n", "index.ndx"])
+        cmd_hbond.extend(["-n", str(index_file.name)])
         hbond_input = f"{prot_name}\n{lig_name}\n"
     else:
         hbond_input = "Protein\nLIG\n"
@@ -564,59 +871,63 @@ def analyze_trajectory(working_dir: Path):
             "Pontes de hidrogênio (Proteína-Ligante)",
         )
     except Exception:
-        # Fallback sem flags extras caso a versão do GROMACS restrinja parâmetros
         cmd_hbond_fallback = [
             gmx_bin,
             "hbond",
             "-s",
-            "md.tpr",
+            str(tpr_file.name),
             "-f",
-            "md_fit.xtc",
+            str(fit_xtc.name),
             "-num",
-            "hbond.xvg",
+            hbond_xvg,
             "-tu",
             "ns",
         ]
         if index_file.exists():
-            cmd_hbond_fallback.extend(["-n", "index.ndx"])
+            cmd_hbond_fallback.extend(["-n", str(index_file.name)])
         run_analysis_cmd(
             cmd_hbond_fallback,
             working_dir,
             hbond_input,
             "Pontes de hidrogênio (Proteína-Ligante)",
         )
+    shutil.copy2(working_dir / hbond_xvg, working_dir / "hbond.xvg")
 
     # 4. Raio de Giro (Rg - Compacidade e Estabilidade Global de Enovelamento)
+    gyrate_xvg = f"{prefix}gyrate.xvg"
     cmd_gyrate = [
         gmx_bin,
         "gyrate",
         "-s",
-        "md.tpr",
+        str(tpr_file.name),
         "-f",
-        "md_fit.xtc",
+        str(fit_xtc.name),
         "-o",
-        "gyrate.xvg",
+        gyrate_xvg,
     ]
     try:
         run_analysis_cmd(cmd_gyrate, working_dir, "1\n", "Raio de Giro (Rg - Proteína)")
+        shutil.copy2(working_dir / gyrate_xvg, working_dir / "gyrate.xvg")
     except Exception:
         pass
 
     # 5. Área de Superfície Acessível ao Solvente (SASA)
+    sasa_xvg = f"{prefix}sasa.xvg"
     cmd_sasa = [
         gmx_bin,
         "sasa",
         "-s",
-        "md.tpr",
+        str(tpr_file.name),
         "-f",
-        "md_fit.xtc",
+        str(fit_xtc.name),
         "-o",
-        "sasa.xvg",
+        sasa_xvg,
         "-tu",
         "ns",
     ]
     try:
         run_analysis_cmd(cmd_sasa, working_dir, "1\n", "Área de Superfície Acessível ao Solvente (SASA)")
+        shutil.copy2(working_dir / sasa_xvg, working_dir / "sasa.xvg")
     except Exception:
         pass
 
@@ -624,10 +935,10 @@ def analyze_trajectory(working_dir: Path):
     parse_hbond_occupancy(working_dir)
 
     # 7. Agrupamento Conformacional GROMOS (gmx cluster) para extração da pose representativa
-    calculate_clusters(working_dir)
+    calculate_clusters(working_dir, target_id=target_id)
 
     # 8. Exportação automatizada de todas as matrizes brutas em formato CSV para publicação
-    export_analysis_csv(working_dir)
+    export_analysis_csv(working_dir, target_id=target_id)
 
 
 def parse_xvg_multicolumn(
@@ -747,21 +1058,29 @@ def parse_xvg(file_path: Path) -> Tuple[List[float], List[float]]:
     return x_vals, y_vals
 
 
-def plot_md_results(working_dir: Path) -> Dict[str, Path]:
+def plot_md_results(
+    working_dir: Path, target_id: Optional[str] = None
+) -> Dict[str, Path]:
     """
-    Lê os arquivos .xvg gerados na análise (rmsd.xvg, rmsd_lig.xvg, rmsf.xvg, hbond.xvg) e gera gráficos
+    Lê os arquivos .xvg gerados na análise e gera gráficos
     com padrão estético científico de publicação (300 DPI) cobrindo a extensão completa da simulação (0 - 100 ns).
 
-    Salva diretamente no working_dir:
-    - rmsd.png: Tempo (ns) vs RMSD (nm) para Backbone da Proteína e Ligante no sítio ativo (0 - 100 ns)
-    - rmsf.png: Número do Resíduo vs Flutuação RMSF (nm) (0 - 100 ns)
-    - hbond.png: Tempo (ns) vs Número de Pontes de Hidrogênio (0 - 100 ns)
-
+    Salva no working_dir os gráficos com prefixo do alvo (<target_id>_*.png) e espelhos (*.png).
     Retorna um dicionário mapeando o nome da análise ao caminho do arquivo .png gerado.
     """
     working_dir = Path(working_dir)
     if not working_dir.exists():
         raise FileNotFoundError(f"Diretório de trabalho não encontrado: {working_dir}")
+
+    # Identificação do alvo
+    if not target_id:
+        target_id = sanitize_target_id(working_dir.name)
+        if target_id.lower() in ("md_files", "screening", "data"):
+            candidates = list(working_dir.glob("*_rmsd.xvg")) or list(working_dir.glob("*_md.tpr"))
+            if candidates:
+                target_id = candidates[0].stem.replace("_rmsd", "").replace("_md", "")
+    target_id = sanitize_target_id(target_id)
+    prefix = f"{target_id}_"
 
     # Configuração de estilo científico de alta qualidade
     if sns is not None:
@@ -783,8 +1102,13 @@ def plot_md_results(working_dir: Path) -> Dict[str, Path]:
     generated_plots: Dict[str, Path] = {}
 
     # 1. Gráfico de RMSD (Janela Completa: 0 - 100 ns - Backbone & Ligante)
-    rmsd_file = working_dir / "rmsd.xvg"
-    rmsd_lig_file = working_dir / "rmsd_lig.xvg"
+    rmsd_file = working_dir / f"{prefix}rmsd.xvg"
+    if not rmsd_file.exists():
+        rmsd_file = working_dir / "rmsd.xvg"
+
+    rmsd_lig_file = working_dir / f"{prefix}rmsd_lig.xvg"
+    if not rmsd_lig_file.exists():
+        rmsd_lig_file = working_dir / "rmsd_lig.xvg"
 
     if rmsd_file.exists():
         x_time, y_rmsd, meta_rmsd = parse_xvg_with_meta(rmsd_file)
@@ -793,7 +1117,6 @@ def plot_md_results(working_dir: Path) -> Dict[str, Path]:
             x_time = [p[0] for p in sorted_rmsd]
             y_rmsd = [p[1] for p in sorted_rmsd]
 
-            # Conversão automática de unidades (ps para ns) se necessário
             xaxis_lbl = meta_rmsd.get("xaxis_label", "").lower()
             if (
                 "ps" in xaxis_lbl
@@ -807,7 +1130,6 @@ def plot_md_results(working_dir: Path) -> Dict[str, Path]:
                 x_time, y_rmsd, color="#1f77b4", linewidth=1.6, label="Protein Backbone"
             )
 
-            # Adiciona linha de média da proteína
             mean_rmsd = sum(y_rmsd) / len(y_rmsd)
             ax.axhline(
                 mean_rmsd,
@@ -819,7 +1141,6 @@ def plot_md_results(working_dir: Path) -> Dict[str, Path]:
 
             max_x = max(x_time) if x_time else 100.0
 
-            # Plota RMSD do ligante se disponível para demonstrar persistência no sítio
             if rmsd_lig_file.exists():
                 x_lig, y_lig, meta_lig = parse_xvg_with_meta(rmsd_lig_file)
                 if x_lig and y_lig:
@@ -854,7 +1175,7 @@ def plot_md_results(working_dir: Path) -> Dict[str, Path]:
             ax.set_xlabel("Time (ns)", fontweight="bold")
             ax.set_ylabel("RMSD (nm)", fontweight="bold")
             ax.set_title(
-                "Structural Stability & Ligand Residence (0 - 100 ns)",
+                f"Structural Stability & Ligand Residence ({target_id} | 0 - 100 ns)",
                 fontweight="bold",
                 pad=12,
             )
@@ -862,19 +1183,22 @@ def plot_md_results(working_dir: Path) -> Dict[str, Path]:
             ax.set_ylim(bottom=0)
             ax.legend(loc="upper left", frameon=True, framealpha=0.9)
 
-            out_rmsd_png = working_dir / "rmsd.png"
+            out_rmsd_png = working_dir / f"{prefix}rmsd.png"
             fig.savefig(out_rmsd_png, dpi=300, bbox_inches="tight")  # type: ignore
             plt.close(fig)
+            shutil.copy2(out_rmsd_png, working_dir / "rmsd.png")
             generated_plots["rmsd"] = out_rmsd_png
 
     # 2. Gráfico de RMSF (Janela Completa: 0 - 100 ns)
-    rmsf_file = working_dir / "rmsf.xvg"
+    rmsf_file = working_dir / f"{prefix}rmsf.xvg"
+    if not rmsf_file.exists():
+        rmsf_file = working_dir / "rmsf.xvg"
+
     if rmsf_file.exists():
         x_res, y_rmsf, _ = parse_xvg_with_meta(rmsf_file)
         if x_res and y_rmsf:
             fig, ax = plt.subplots(figsize=(8.5, 4.5), dpi=300)
 
-            # Tratamento para ordenação e suporte a múltiplos segmentos/cadeias
             if len(set(x_res)) == len(x_res):
                 sorted_data = sorted(zip(x_res, y_rmsf), key=lambda p: p[0])
                 x_plot = [p[0] for p in sorted_data]
@@ -925,7 +1249,9 @@ def plot_md_results(working_dir: Path) -> Dict[str, Path]:
             ax.set_xlabel(x_label, fontweight="bold")
             ax.set_ylabel("RMSF (nm)", fontweight="bold")
             ax.set_title(
-                "Root Mean Square Fluctuation per Residue (0 - 100 ns)", fontweight="bold", pad=12
+                f"Root Mean Square Fluctuation per Residue ({target_id} | 0 - 100 ns)",
+                fontweight="bold",
+                pad=12,
             )
             ax.set_xlim(
                 left=min(x_plot) if x_plot else 0, right=max(x_plot) if x_plot else 1
@@ -933,13 +1259,17 @@ def plot_md_results(working_dir: Path) -> Dict[str, Path]:
             ax.set_ylim(bottom=0)
             ax.legend(loc="upper right", frameon=True, framealpha=0.9)
 
-            out_rmsf_png = working_dir / "rmsf.png"
+            out_rmsf_png = working_dir / f"{prefix}rmsf.png"
             fig.savefig(out_rmsf_png, dpi=300, bbox_inches="tight")  # type: ignore
             plt.close(fig)
+            shutil.copy2(out_rmsf_png, working_dir / "rmsf.png")
             generated_plots["rmsf"] = out_rmsf_png
 
     # 3. Gráfico de Pontes de Hidrogênio (HBond) (Janela Completa: 0 - 100 ns)
-    hbond_file = working_dir / "hbond.xvg"
+    hbond_file = working_dir / f"{prefix}hbond.xvg"
+    if not hbond_file.exists():
+        hbond_file = working_dir / "hbond.xvg"
+
     if hbond_file.exists():
         x_time, y_hb, meta_hb = parse_xvg_with_meta(hbond_file)
         if x_time and y_hb:
@@ -982,18 +1312,22 @@ def plot_md_results(working_dir: Path) -> Dict[str, Path]:
 
             ax.set_xlabel("Time (ns)", fontweight="bold")
             ax.set_ylabel("H-Bonds count", fontweight="bold")
-            ax.set_title("Protein–Ligand Hydrogen Bonds (0 - 100 ns)", fontweight="bold", pad=12)
+            ax.set_title(f"Protein–Ligand Hydrogen Bonds ({target_id} | 0 - 100 ns)", fontweight="bold", pad=12)
             ax.set_xlim(left=0, right=max(x_time) if x_time else 100.0)
             ax.set_ylim(bottom=0)
             ax.legend(loc="upper right", frameon=True, framealpha=0.9)
 
-            out_hbond_png = working_dir / "hbond.png"
+            out_hbond_png = working_dir / f"{prefix}hbond.png"
             fig.savefig(out_hbond_png, dpi=300, bbox_inches="tight")  # type: ignore
             plt.close(fig)
+            shutil.copy2(out_hbond_png, working_dir / "hbond.png")
             generated_plots["hbond"] = out_hbond_png
 
     # 4. Gráfico de Raio de Giro (Rg - Compacidade e Enovelamento)
-    gyrate_file = working_dir / "gyrate.xvg"
+    gyrate_file = working_dir / f"{prefix}gyrate.xvg"
+    if not gyrate_file.exists():
+        gyrate_file = working_dir / "gyrate.xvg"
+
     if gyrate_file.exists():
         try:
             x_time, y_dict, meta_gyrate = parse_xvg_multicolumn(gyrate_file)
@@ -1012,19 +1346,23 @@ def plot_md_results(working_dir: Path) -> Dict[str, Path]:
 
                 ax.set_xlabel("Time (ns)", fontweight="bold")
                 ax.set_ylabel("Radius of Gyration (nm)", fontweight="bold")
-                ax.set_title("Protein Compactness & Folding Stability - Rg (0 - 100 ns)", fontweight="bold", pad=12)
+                ax.set_title(f"Protein Compactness & Folding Stability ({target_id} | 0 - 100 ns)", fontweight="bold", pad=12)
                 ax.set_xlim(left=0, right=max(x_time) if x_time else 100.0)
                 ax.legend(loc="upper right", frameon=True, framealpha=0.9)
 
-                out_gyrate_png = working_dir / "gyrate.png"
+                out_gyrate_png = working_dir / f"{prefix}gyrate.png"
                 fig.savefig(out_gyrate_png, dpi=300, bbox_inches="tight")
                 plt.close(fig)
+                shutil.copy2(out_gyrate_png, working_dir / "gyrate.png")
                 generated_plots["gyrate"] = out_gyrate_png
         except Exception:
             pass
 
     # 5. Gráfico de Área de Superfície Acessível ao Solvente (SASA)
-    sasa_file = working_dir / "sasa.xvg"
+    sasa_file = working_dir / f"{prefix}sasa.xvg"
+    if not sasa_file.exists():
+        sasa_file = working_dir / "sasa.xvg"
+
     if sasa_file.exists():
         try:
             x_time, y_dict, meta_sasa = parse_xvg_multicolumn(sasa_file)
@@ -1043,23 +1381,27 @@ def plot_md_results(working_dir: Path) -> Dict[str, Path]:
 
                 ax.set_xlabel("Time (ns)", fontweight="bold")
                 ax.set_ylabel(r"SASA ($\mathrm{nm}^2$)", fontweight="bold")
-                ax.set_title("Solvent Accessible Surface Area - SASA (0 - 100 ns)", fontweight="bold", pad=12)
+                ax.set_title(f"Solvent Accessible Surface Area ({target_id} | 0 - 100 ns)", fontweight="bold", pad=12)
                 ax.set_xlim(left=0, right=max(x_time) if x_time else 100.0)
                 ax.legend(loc="upper right", frameon=True, framealpha=0.9)
 
-                out_sasa_png = working_dir / "sasa.png"
+                out_sasa_png = working_dir / f"{prefix}sasa.png"
                 fig.savefig(out_sasa_png, dpi=300, bbox_inches="tight")
                 plt.close(fig)
+                shutil.copy2(out_sasa_png, working_dir / "sasa.png")
                 generated_plots["sasa"] = out_sasa_png
         except Exception:
             pass
 
     # 6. Gráfico de Decomposição MM-PBSA por Resíduo (Hotspots Energéticos) se disponível
-    decomp_dat_file = working_dir / "FINAL_DECOMP_MMPBSA.dat"
+    decomp_dat_file = working_dir / f"{prefix}FINAL_DECOMP_MMPBSA.dat"
+    if not decomp_dat_file.exists():
+        decomp_dat_file = working_dir / "FINAL_DECOMP_MMPBSA.dat"
+
     if decomp_dat_file.exists():
         decomp_data = parse_mmpbsa_decomp(decomp_dat_file)
         if decomp_data:
-            out_decomp_png = plot_mmpbsa_decomp(decomp_data, working_dir)
+            out_decomp_png = plot_mmpbsa_decomp(decomp_data, working_dir, target_id=target_id)
             if out_decomp_png:
                 generated_plots["decomp"] = out_decomp_png
 
@@ -1071,14 +1413,31 @@ def plot_md_results(working_dir: Path) -> Dict[str, Path]:
     return generated_plots
 
 
-def calculate_clusters(working_dir: Path, cutoff: float = 0.15) -> Optional[Path]:
+def calculate_clusters(
+    working_dir: Path, target_id: Optional[str] = None, cutoff: float = 0.15
+) -> Optional[Path]:
     """
     Executa o agrupamento conformacional da trajetória via algoritmo GROMOS no GROMACS (gmx cluster).
-    Gera a estrutura medóide mais representativa do estado estacionário (cluster_medoid.gro).
+    Gera a estrutura medóide mais representativa do estado estacionário (<target_id>_cluster_medoid.gro).
     """
     working_dir = Path(working_dir)
-    tpr_file = working_dir / "md.tpr"
-    fit_xtc = working_dir / "md_fit.xtc"
+    if not target_id:
+        target_id = sanitize_target_id(working_dir.name)
+        if target_id.lower() in ("md_files", "screening", "data"):
+            candidates = list(working_dir.glob("*_md.tpr")) or list(working_dir.glob("*_md_fit.xtc"))
+            if candidates:
+                target_id = candidates[0].stem.replace("_md_fit", "").replace("_md", "")
+    target_id = sanitize_target_id(target_id)
+    prefix = f"{target_id}_"
+
+    tpr_file = working_dir / f"{prefix}md.tpr"
+    if not tpr_file.exists():
+        tpr_file = working_dir / "md.tpr"
+
+    fit_xtc = working_dir / f"{prefix}md_fit.xtc"
+    if not fit_xtc.exists():
+        fit_xtc = working_dir / "md_fit.xtc"
+
     if not tpr_file.exists() or not fit_xtc.exists():
         return None
 
@@ -1086,31 +1445,36 @@ def calculate_clusters(working_dir: Path, cutoff: float = 0.15) -> Optional[Path
     if not gmx_bin:
         return None
 
+    medoid_name = f"{prefix}cluster_medoid.gro"
+    log_name = f"{prefix}cluster.log"
+    dist_name = f"{prefix}clust-dist.xvg"
+
     cmd_cluster = [
         gmx_bin,
         "cluster",
         "-s",
-        "md.tpr",
+        str(tpr_file.name),
         "-f",
-        "md_fit.xtc",
+        str(fit_xtc.name),
         "-method",
         "gromos",
         "-cutoff",
         str(cutoff),
         "-cl",
-        "cluster_medoid.gro",
+        medoid_name,
         "-g",
-        "cluster.log",
+        log_name,
         "-dist",
-        "clust-dist.xvg",
+        dist_name,
     ]
 
     try:
         env = os.environ.copy()
+        env.pop("PYTHONPATH", None)
+        env.pop("PYTHONHOME", None)
         exec_dir = str(Path(gmx_bin).parent)
         env["PATH"] = f"{exec_dir}{os.pathsep}{env.get('PATH', '')}"
 
-        # Entrada para seleção de grupos: 1 (Protein fit) e 1 (Protein cluster)
         subprocess.run(
             cmd_cluster,
             cwd=str(working_dir),
@@ -1119,9 +1483,12 @@ def calculate_clusters(working_dir: Path, cutoff: float = 0.15) -> Optional[Path
             text=True,
             input="1\n1\n",
         )
-        medoid_path = working_dir / "cluster_medoid.gro"
+        medoid_path = working_dir / medoid_name
         if medoid_path.exists():
+            shutil.copy2(medoid_path, working_dir / "cluster_medoid.gro")
             return medoid_path
+        if (working_dir / "cluster_medoid.gro").exists():
+            return working_dir / "cluster_medoid.gro"
     except Exception:
         pass
 
@@ -1294,13 +1661,27 @@ def parse_mmpbsa_decomp(decomp_path: Path) -> List[Dict[str, Any]]:
     return residues_data
 
 
-def plot_mmpbsa_decomp(decomp_data: List[Dict[str, Any]], working_dir: Path) -> Optional[Path]:
+def plot_mmpbsa_decomp(
+    decomp_data: List[Dict[str, Any]],
+    working_dir: Path,
+    target_id: Optional[str] = None,
+) -> Optional[Path]:
     """
     Gera gráfico de barras de publicação (decomp_mmpbsa.png a 300 DPI) destacando os resíduos chave (hotspots)
     que mais contribuem para a energia livre de ligação MM-PBSA.
     """
     if not decomp_data:
         return None
+
+    working_dir = Path(working_dir)
+    if not target_id:
+        target_id = sanitize_target_id(working_dir.name)
+        if target_id.lower() in ("md_files", "screening", "data"):
+            candidates = list(working_dir.glob("*_FINAL_DECOMP_MMPBSA.dat")) or list(working_dir.glob("*_md.tpr"))
+            if candidates:
+                target_id = candidates[0].stem.replace("_FINAL_DECOMP_MMPBSA", "").replace("_md", "")
+    target_id = sanitize_target_id(target_id)
+    prefix = f"{target_id}_"
 
     # Filtra os resíduos mais estabilizadores (< 0) e principais desestabilizadores (> 0.5 kcal/mol)
     stabilizing = [r for r in decomp_data if r["total"] < 0][:15]
@@ -1349,7 +1730,7 @@ def plot_mmpbsa_decomp(decomp_data: List[Dict[str, Any]], working_dir: Path) -> 
     ax.set_yticklabels(labels, fontweight="bold")
     ax.axvline(0, color="gray", linestyle="--", linewidth=0.9, alpha=0.7)
     ax.set_xlabel(r"Per-Residue $\Delta G_{\mathrm{bind}}$ Contribution (kcal/mol)", fontweight="bold")
-    ax.set_title("MM-PBSA Per-Residue Free Energy Decomposition (Hotspot Residues)", fontweight="bold", pad=12)
+    ax.set_title(f"MM-PBSA Per-Residue Free Energy Decomposition ({target_id} | Hotspots)", fontweight="bold", pad=12)
 
     for idx, bar in enumerate(bars):
         val = totals[idx]
@@ -1357,23 +1738,41 @@ def plot_mmpbsa_decomp(decomp_data: List[Dict[str, Any]], working_dir: Path) -> 
         ha = "left" if val >= 0 else "right"
         ax.text(val + offset, bar.get_y() + bar.get_height() / 2, f"{val:.2f}", va="center", ha=ha, fontsize=8.5, fontweight="bold")
 
-    out_png = working_dir / "decomp_mmpbsa.png"
+    out_png = working_dir / f"{prefix}decomp_mmpbsa.png"
     fig.savefig(out_png, dpi=300, bbox_inches="tight")
     plt.close(fig)
+    shutil.copy2(out_png, working_dir / "decomp_mmpbsa.png")
     return out_png
 
 
-def export_analysis_csv(working_dir: Path) -> Dict[str, Path]:
+def export_analysis_csv(
+    working_dir: Path, target_id: Optional[str] = None
+) -> Dict[str, Path]:
     """
     Exporta todas as séries temporais e dados calculados de DM para matrizes CSV limpas
-    prontas para publicação e importação em softwares científicos (Origin, GraphPad Prism, R, Python).
+    com prefixo do alvo (<target_id>_*.csv) e espelhos (*.csv).
     """
     working_dir = Path(working_dir)
+    if not target_id:
+        target_id = sanitize_target_id(working_dir.name)
+        if target_id.lower() in ("md_files", "screening", "data"):
+            candidates = list(working_dir.glob("*_rmsd.xvg")) or list(working_dir.glob("*_md.tpr"))
+            if candidates:
+                target_id = candidates[0].stem.replace("_rmsd", "").replace("_md", "")
+    target_id = sanitize_target_id(target_id)
+    prefix = f"{target_id}_"
+
     exported_csvs: Dict[str, Path] = {}
 
     # 1. RMSD (Backbone e Ligante)
-    rmsd_file = working_dir / "rmsd.xvg"
-    rmsd_lig_file = working_dir / "rmsd_lig.xvg"
+    rmsd_file = working_dir / f"{prefix}rmsd.xvg"
+    if not rmsd_file.exists():
+        rmsd_file = working_dir / "rmsd.xvg"
+
+    rmsd_lig_file = working_dir / f"{prefix}rmsd_lig.xvg"
+    if not rmsd_lig_file.exists():
+        rmsd_lig_file = working_dir / "rmsd_lig.xvg"
+
     if rmsd_file.exists():
         x_time, y_prot, meta = parse_xvg_with_meta(rmsd_file)
         if "ps" in meta.get("xaxis_label", "").lower() or (x_time and max(x_time) > 1000 and "ns" not in meta.get("xaxis_label", "").lower()):
@@ -1387,82 +1786,102 @@ def export_analysis_csv(working_dir: Path) -> Dict[str, Path]:
             for xl, yl in zip(x_l, y_l):
                 y_lig_map[round(xl, 3)] = yl
 
-        rmsd_csv_path = working_dir / "rmsd.csv"
+        rmsd_csv_path = working_dir / f"{prefix}rmsd.csv"
         with open(rmsd_csv_path, "w", encoding="utf-8") as f:
             f.write("Time_ns,Protein_Backbone_RMSD_nm,Ligand_RMSD_nm\n")
             for xt, yp in zip(x_time, y_prot):
                 yl = y_lig_map.get(round(xt, 3), "")
                 f.write(f"{xt:.3f},{yp:.4f},{yl if yl != '' else ''}\n")
+        shutil.copy2(rmsd_csv_path, working_dir / "rmsd.csv")
         exported_csvs["rmsd"] = rmsd_csv_path
 
     # 2. RMSF
-    rmsf_file = working_dir / "rmsf.xvg"
+    rmsf_file = working_dir / f"{prefix}rmsf.xvg"
+    if not rmsf_file.exists():
+        rmsf_file = working_dir / "rmsf.xvg"
+
     if rmsf_file.exists():
         x_res, y_rmsf, _ = parse_xvg_with_meta(rmsf_file)
-        rmsf_csv_path = working_dir / "rmsf.csv"
+        rmsf_csv_path = working_dir / f"{prefix}rmsf.csv"
         with open(rmsf_csv_path, "w", encoding="utf-8") as f:
             f.write("Residue_Number,Calpha_RMSF_nm\n")
             for xr, yr in zip(x_res, y_rmsf):
                 f.write(f"{int(xr)},{yr:.4f}\n")
+        shutil.copy2(rmsf_csv_path, working_dir / "rmsf.csv")
         exported_csvs["rmsf"] = rmsf_csv_path
 
     # 3. HBond
-    hbond_file = working_dir / "hbond.xvg"
+    hbond_file = working_dir / f"{prefix}hbond.xvg"
+    if not hbond_file.exists():
+        hbond_file = working_dir / "hbond.xvg"
+
     if hbond_file.exists():
         x_time, y_hb, meta = parse_xvg_with_meta(hbond_file)
         if "ps" in meta.get("xaxis_label", "").lower() or (x_time and max(x_time) > 1000 and "ns" not in meta.get("xaxis_label", "").lower()):
             x_time = [t / 1000.0 for t in x_time]
-        hbond_csv_path = working_dir / "hbond.csv"
+        hbond_csv_path = working_dir / f"{prefix}hbond.csv"
         with open(hbond_csv_path, "w", encoding="utf-8") as f:
             f.write("Time_ns,HBond_Count\n")
             for xt, yb in zip(x_time, y_hb):
                 f.write(f"{xt:.3f},{int(yb)}\n")
+        shutil.copy2(hbond_csv_path, working_dir / "hbond.csv")
         exported_csvs["hbond"] = hbond_csv_path
 
     # 4. Raio de Giro (gyrate.xvg)
-    gyrate_file = working_dir / "gyrate.xvg"
+    gyrate_file = working_dir / f"{prefix}gyrate.xvg"
+    if not gyrate_file.exists():
+        gyrate_file = working_dir / "gyrate.xvg"
+
     if gyrate_file.exists():
         try:
             x_time, y_dict, meta = parse_xvg_multicolumn(gyrate_file)
             if "ps" in meta.get("xaxis_label", "").lower() or (x_time and max(x_time) > 1000 and "ns" not in meta.get("xaxis_label", "").lower()):
                 x_time = [t / 1000.0 for t in x_time]
             headers = ["Time_ns"] + [k.replace(" ", "_") + "_nm" for k in y_dict.keys()]
-            gyrate_csv_path = working_dir / "gyrate.csv"
+            gyrate_csv_path = working_dir / f"{prefix}gyrate.csv"
             with open(gyrate_csv_path, "w", encoding="utf-8") as f:
                 f.write(",".join(headers) + "\n")
                 keys = list(y_dict.keys())
                 for idx, xt in enumerate(x_time):
                     row_vals = [f"{xt:.3f}"] + [f"{y_dict[k][idx]:.4f}" if idx < len(y_dict[k]) else "" for k in keys]
                     f.write(",".join(row_vals) + "\n")
+            shutil.copy2(gyrate_csv_path, working_dir / "gyrate.csv")
             exported_csvs["gyrate"] = gyrate_csv_path
         except Exception:
             pass
 
     # 5. SASA (sasa.xvg)
-    sasa_file = working_dir / "sasa.xvg"
+    sasa_file = working_dir / f"{prefix}sasa.xvg"
+    if not sasa_file.exists():
+        sasa_file = working_dir / "sasa.xvg"
+
     if sasa_file.exists():
         try:
             x_time, y_dict, meta = parse_xvg_multicolumn(sasa_file)
             if "ps" in meta.get("xaxis_label", "").lower() or (x_time and max(x_time) > 1000 and "ns" not in meta.get("xaxis_label", "").lower()):
                 x_time = [t / 1000.0 for t in x_time]
             headers = ["Time_ns"] + [k.replace(" ", "_") + "_nm2" for k in y_dict.keys()]
-            sasa_csv_path = working_dir / "sasa.csv"
+            sasa_csv_path = working_dir / f"{prefix}sasa.csv"
             with open(sasa_csv_path, "w", encoding="utf-8") as f:
                 f.write(",".join(headers) + "\n")
                 keys = list(y_dict.keys())
                 for idx, xt in enumerate(x_time):
                     row_vals = [f"{xt:.3f}"] + [f"{y_dict[k][idx]:.4f}" if idx < len(y_dict[k]) else "" for k in keys]
                     f.write(",".join(row_vals) + "\n")
+            shutil.copy2(sasa_csv_path, working_dir / "sasa.csv")
             exported_csvs["sasa"] = sasa_csv_path
         except Exception:
             pass
 
     # 6. Decomposição MM-PBSA
-    decomp_file = working_dir / "FINAL_DECOMP_MMPBSA.dat"
+    decomp_file = working_dir / f"{prefix}FINAL_DECOMP_MMPBSA.dat"
+    if not decomp_file.exists():
+        decomp_file = working_dir / "FINAL_DECOMP_MMPBSA.dat"
+
     if decomp_file.exists():
         decomp_data = parse_mmpbsa_decomp(decomp_file)
         if decomp_data:
-            decomp_csv_path = working_dir / "decomp_mmpbsa.csv"
+            decomp_csv_path = working_dir / f"{prefix}decomp_mmpbsa.csv"
             with open(decomp_csv_path, "w", encoding="utf-8") as f:
                 f.write(
                     "Residue,Van_der_Waals_kcal_mol,Electrostatic_kcal_mol,Polar_Solvation_kcal_mol,Nonpolar_Solvation_kcal_mol,Total_DeltaG_kcal_mol,Std_kcal_mol,SEM_kcal_mol\n"
@@ -1472,7 +1891,30 @@ def export_analysis_csv(working_dir: Path) -> Dict[str, Path]:
                     f.write(
                         f'"{raw_res}",{d.get("vdw", 0.0):.3f},{d.get("electrostatic", 0.0):.3f},{d.get("polar", 0.0):.3f},{d.get("nonpolar", 0.0):.3f},{d.get("total", 0.0):.3f},{d.get("std", 0.0):.3f},{d.get("sem", 0.0):.3f}\n'
                     )
+            shutil.copy2(decomp_csv_path, working_dir / "decomp_mmpbsa.csv")
             exported_csvs["decomp"] = decomp_csv_path
+
+    # 7. Ocupação de Pontes de Hidrogênio
+    hbond_occ_file = working_dir / f"{prefix}hbond_occupancy.json"
+    if not hbond_occ_file.exists():
+        hbond_occ_file = working_dir / "hbond_occupancy.json"
+
+    if hbond_occ_file.exists():
+        try:
+            with open(hbond_occ_file, "r", encoding="utf-8") as f:
+                occ_data = json.load(f)
+            if occ_data:
+                occ_csv_path = working_dir / f"{prefix}hbond_occupancy.csv"
+                with open(occ_csv_path, "w", encoding="utf-8") as f:
+                    f.write("Donor,Acceptor,Occupancy_Percent,Classification\n")
+                    for row in occ_data:
+                        f.write(f'"{row.get("donor", "")}","{row.get("acceptor", "")}",{row.get("occupancy_percent", 0.0):.2f},"{row.get("classification", "")}"\n')
+                shutil.copy2(occ_csv_path, working_dir / "hbond_occupancy.csv")
+                exported_csvs["hbond_occupancy"] = occ_csv_path
+        except Exception:
+            pass
+
+    return exported_csvs
 
     # 7. Ocupação de Pontes de Hidrogênio
     hbond_occ_file = working_dir / "hbond_occupancy.json"
@@ -1787,13 +2229,14 @@ def _ensure_ligand_mol2(working_dir: Path, lig_idx: int) -> Optional[Path]:
     return None
 
 
-def calculate_mmpbsa(working_dir: Path, force: bool = False) -> Dict[str, Any]:
+def calculate_mmpbsa(
+    working_dir: Path, target_id: Optional[str] = None, force: bool = False
+) -> Dict[str, Any]:
     """
     Executa o cálculo de Energia Livre de Ligação MM-PBSA via gmx_MMPBSA (Janela Termodinâmica: 60 - 100 ns / Últimos 40%):
     1. Se os resultados já foram previamente calculados e force=False, reutiliza os dados existentes sem recalcular.
     2. Realiza a limpeza em processo único de quaisquer artefatos e arquivos residuais antes da invocação do MPI.
     3. Extrai o número total de frames e configura dinamicamente o arquivo 'mmpbsa.in' para os últimos 40% (estado estacionário).
-       Ex: para 1000 frames totais, define startframe=600, endframe=1000, interval=2.
     4. Identifica os grupos do receptor (Protein) e ligante (ligand_md / LIG) em index.ndx.
     5. Executa o gmx_MMPBSA de forma paralela via MPI com mitigação de race condition e tolerância a falhas.
     6. Extrai contribuições energéticas (Van der Waals, Eletrostática, Solvatação Polar e Apolar) e Delta G total.
@@ -1805,21 +2248,45 @@ def calculate_mmpbsa(working_dir: Path, force: bool = False) -> Dict[str, Any]:
     if not working_dir.exists():
         raise FileNotFoundError(f"Diretório de trabalho não encontrado: {working_dir}")
 
-    tpr_file = working_dir / "md.tpr"
-    fit_xtc = working_dir / "md_fit.xtc"
-    index_file = working_dir / "index.ndx"
-    dat_output = working_dir / "FINAL_RESULTS_MMPBSA.dat"
-    decomp_dat_output = working_dir / "FINAL_DECOMP_MMPBSA.dat"
+    # Identificação do alvo
+    if not target_id:
+        target_id = sanitize_target_id(working_dir.name)
+        if target_id.lower() in ("md_files", "screening", "data"):
+            candidates = list(working_dir.glob("*_md.tpr")) or list(working_dir.glob("*_md_fit.xtc"))
+            if candidates:
+                target_id = candidates[0].stem.replace("_md_fit", "").replace("_md", "")
+    target_id = sanitize_target_id(target_id)
+    prefix = f"{target_id}_"
+
+    tpr_file = working_dir / f"{prefix}md.tpr"
+    if not tpr_file.exists():
+        tpr_file = working_dir / "md.tpr"
+
+    fit_xtc = working_dir / f"{prefix}md_fit.xtc"
+    if not fit_xtc.exists():
+        fit_xtc = working_dir / "md_fit.xtc"
+
+    index_file = working_dir / f"{prefix}index.ndx"
+    if not index_file.exists():
+        index_file = working_dir / "index.ndx"
+
+    dat_output = working_dir / f"{prefix}FINAL_RESULTS_MMPBSA.dat"
+    if not dat_output.exists() and (working_dir / "FINAL_RESULTS_MMPBSA.dat").exists():
+        dat_output = working_dir / "FINAL_RESULTS_MMPBSA.dat"
+
+    decomp_dat_output = working_dir / f"{prefix}FINAL_DECOMP_MMPBSA.dat"
+    if not decomp_dat_output.exists() and (working_dir / "FINAL_DECOMP_MMPBSA.dat").exists():
+        decomp_dat_output = working_dir / "FINAL_DECOMP_MMPBSA.dat"
 
     if not tpr_file.exists():
-        raise FileNotFoundError(f"Arquivo 'md.tpr' não encontrado em: {working_dir}")
+        raise FileNotFoundError(f"Arquivo '{tpr_file.name}' não encontrado em: {working_dir}")
     if not fit_xtc.exists():
         raise FileNotFoundError(
-            f"Trajetória corrigida 'md_fit.xtc' não encontrada em: {working_dir}. "
+            f"Trajetória corrigida '{fit_xtc.name}' não encontrada em: {working_dir}. "
             "Execute fix_pbc antes de calcular o MM-PBSA."
         )
     if not index_file.exists():
-        raise FileNotFoundError(f"Arquivo 'index.ndx' não encontrado em: {working_dir}")
+        raise FileNotFoundError(f"Arquivo '{index_file.name}' não encontrado em: {working_dir}")
 
     # Reutilização imediata de cálculos já concluídos com sucesso (evita reexecução desnecessária de ~1h)
     if not force and dat_output.exists() and dat_output.stat().st_size > 0:
@@ -1833,18 +2300,19 @@ def calculate_mmpbsa(working_dir: Path, force: bool = False) -> Dict[str, Any]:
 
             existing_summary["thermodynamic_window"] = "60 - 100 ns (Últimos 40% - Estado Estacionário)"
             existing_summary["protocol"] = "Dupla Escala Temporal (MM-PBSA 60-100 ns / Trajetória 0-100 ns)"
-            existing_summary["raw_output_file"] = "FINAL_RESULTS_MMPBSA.dat"
+            existing_summary["raw_output_file"] = dat_output.name
 
             if decomp_data:
                 existing_summary["per_residue_decomposition"] = decomp_data
                 existing_summary["hotspot_residues"] = [r for r in decomp_data if r["total"] < 0][:10]
-                plot_mmpbsa_decomp(decomp_data, working_dir)
+                plot_mmpbsa_decomp(decomp_data, working_dir, target_id=target_id)
 
-            export_analysis_csv(working_dir)
+            export_analysis_csv(working_dir, target_id=target_id)
 
-            summary_json_path = working_dir / "mmpbsa_summary.json"
+            summary_json_path = working_dir / f"{prefix}mmpbsa_summary.json"
             with open(summary_json_path, "w", encoding="utf-8") as f:
                 json.dump(existing_summary, f, indent=2, ensure_ascii=False)
+            shutil.copy2(summary_json_path, working_dir / "mmpbsa_summary.json")
 
             return existing_summary
 
@@ -1857,8 +2325,7 @@ def calculate_mmpbsa(working_dir: Path, force: bool = False) -> Dict[str, Any]:
 
     # 1. Identificação do número de frames e cálculo da janela de equilíbrio (Últimos 40%)
     total_frames = None
-    # 1.1 Tenta obter o número exato de frames a partir de um arquivo .xvg já calculado
-    for xvg_name in ["rmsd.xvg", "gyrate.xvg", "sasa.xvg", "hbond.xvg"]:
+    for xvg_name in [f"{prefix}rmsd.xvg", "rmsd.xvg", f"{prefix}gyrate.xvg", "gyrate.xvg"]:
         xvg_file = working_dir / xvg_name
         if xvg_file.exists():
             try:
@@ -1869,24 +2336,24 @@ def calculate_mmpbsa(working_dir: Path, force: bool = False) -> Dict[str, Any]:
             except Exception:
                 pass
 
-    # 1.2 Se não encontrou via XVG, usa 'gmx check -f md_fit.xtc' com regex preciso
     if total_frames is None:
         gmx_bin = find_executable("gmx")
         if gmx_bin:
             try:
                 env = os.environ.copy()
+                env.pop("PYTHONPATH", None)
+                env.pop("PYTHONHOME", None)
                 exec_dir = str(Path(gmx_bin).parent)
                 env["PATH"] = f"{exec_dir}{os.pathsep}{env.get('PATH', '')}"
 
                 chk_res = subprocess.run(
-                    [gmx_bin, "check", "-f", "md_fit.xtc"],
+                    [gmx_bin, "check", "-f", str(fit_xtc.name)],
                     cwd=str(working_dir),
                     env=env,
                     capture_output=True,
                     text=True,
                 )
                 chk_out = (chk_res.stderr or "") + "\n" + (chk_res.stdout or "")
-                # Na tabela do gmx check: 'Coords       10001    10' ou 'Step         10001    10'
                 m_table = re.search(r"(?:Coords|Step)\s+(\d+)", chk_out)
                 if m_table:
                     total_frames = int(m_table.group(1))
@@ -1901,20 +2368,16 @@ def calculate_mmpbsa(working_dir: Path, force: bool = False) -> Dict[str, Any]:
         total_frames = 1000
 
     # 2. Limpeza atômica em processo único de arquivos de execuções anteriores
-    # Isso impede que múltiplos processos MPI executem 'os.remove' concorrentemente
     stale_patterns = [
         "_GMXMMPBSA_*",
-        "FINAL_RESULTS_MMPBSA.*",
-        "FINAL_DECOMP_MMPBSA.*",
-        "RESULTS_gmx_MMPBSA.h5",
+        "*FINAL_RESULTS_MMPBSA.*",
+        "*FINAL_DECOMP_MMPBSA.*",
+        "*RESULTS_gmx_MMPBSA.h5",
         "COM.prmtop",
         "REC.prmtop",
         "LIG.prmtop",
         "COM_traj_*",
         "reference.pdb",
-        "mmpbsa_summary.json",
-        "decomp_mmpbsa.png",
-        "decomp_mmpbsa.csv",
         "*.inpcrd",
         "*.mdcrd*",
     ]
@@ -1928,21 +2391,20 @@ def calculate_mmpbsa(working_dir: Path, force: bool = False) -> Dict[str, Any]:
             except Exception:
                 pass
 
-    # Protocolo de Janela Termodinâmica: Últimos 40% (ex: 6001 a 10001 para 10001 frames totais)
+    # Protocolo de Janela Termodinâmica: Últimos 40%
     startframe = max(1, int(round(total_frames * 0.60)))
     endframe = total_frames
     frames_in_window = max(1, endframe - startframe + 1)
-    # Amostragem padrão de excelência termodinâmica: ~100 snapshots uniformes na janela estacionária
     interval = max(1, frames_in_window // 100)
     if frames_in_window <= 200 and interval > 2:
         interval = 2
     elif interval < 1:
         interval = 1
 
-    # 3. Criação do arquivo de entrada mmpbsa.in (MM-GBSA com Decomposição por Resíduo OBC2)
+    # 3. Criação do arquivo de entrada mmpbsa.in
     mmpbsa_in_path = working_dir / "mmpbsa.in"
     mmpbsa_in_content = f"""&general
-sys_name="Protein_Ligand_Complex",
+sys_name="{target_id}_Complex",
 startframe={startframe},
 endframe={endframe},
 interval={interval},
@@ -1965,16 +2427,20 @@ print_res="within 6.0",
     groups_list = get_index_groups(index_file)
     _, _, rec_idx, lig_idx = identify_complex_groups(groups_list)
 
-    # Identifica ou gera o arquivo mol2 parametrizado do ligante (ACPYPE / GAFF2)
+    # Identifica ou gera o arquivo mol2 parametrizado do ligante
     ligand_mol2 = _ensure_ligand_mol2(working_dir, lig_idx)
 
-    # 5. Execução do gmx_MMPBSA (com aceleração paralela via MPI se disponível)
+    # 5. Execução do gmx_MMPBSA
     cmd_mmpbsa = []
     mpirun_bin = find_executable("mpirun")
     if mpirun_bin:
         num_cores = max(1, min(8, (os.cpu_count() or 4) - 1))
         if num_cores > 1:
             cmd_mmpbsa.extend([mpirun_bin, "-np", str(num_cores)])
+
+    out_dat_name = f"{prefix}FINAL_RESULTS_MMPBSA.dat"
+    out_decomp_name = f"{prefix}FINAL_DECOMP_MMPBSA.dat"
+    out_csv_name = f"{prefix}FINAL_RESULTS_MMPBSA.csv"
 
     cmd_mmpbsa.extend([
         mmpbsa_bin,
@@ -1983,25 +2449,34 @@ print_res="within 6.0",
         "-i",
         "mmpbsa.in",
         "-cs",
-        "md.tpr",
+        str(tpr_file.name),
         "-ct",
-        "md_fit.xtc",
+        str(fit_xtc.name),
         "-ci",
-        "index.ndx",
+        str(index_file.name),
         "-cg",
         str(rec_idx),
         str(lig_idx),
         "-o",
-        "FINAL_RESULTS_MMPBSA.dat",
+        out_dat_name,
         "-do",
-        "FINAL_DECOMP_MMPBSA.dat",
+        out_decomp_name,
         "-eo",
-        "FINAL_RESULTS_MMPBSA.csv",
+        out_csv_name,
     ])
 
-    if ligand_mol2:
-        mol2_rel = ligand_mol2.resolve().relative_to(working_dir.resolve())
-        cmd_mmpbsa.extend(["-lm", str(mol2_rel).replace("\\", "/")])
+    if ligand_mol2 and ligand_mol2.exists():
+        try:
+            mol2_rel = ligand_mol2.resolve().relative_to(working_dir.resolve())
+            mol2_arg = str(mol2_rel).replace("\\", "/")
+        except ValueError:
+            dest_dir = working_dir / "ligand_md.acpype"
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            dest_mol2 = dest_dir / ligand_mol2.name
+            if not dest_mol2.exists():
+                shutil.copy2(ligand_mol2, dest_mol2)
+            mol2_arg = f"ligand_md.acpype/{dest_mol2.name}"
+        cmd_mmpbsa.extend(["-lm", mol2_arg])
 
     try:
         env = os.environ.copy()
@@ -2017,10 +2492,10 @@ print_res="within 6.0",
             cmd_mmpbsa, cwd=str(working_dir), env=env, capture_output=True, text=True
         )
 
-        # Verificação resiliente de integridade dos resultados gerados
+        final_dat = working_dir / out_dat_name
         is_successful = False
-        if dat_output.exists() and dat_output.stat().st_size > 0:
-            parsed_test = parse_mmpbsa_dat(dat_output)
+        if final_dat.exists() and final_dat.stat().st_size > 0:
+            parsed_test = parse_mmpbsa_dat(final_dat)
             if parsed_test.get("energies", {}).get("delta_g_binding", {}).get("mean", 0.0) != 0.0:
                 is_successful = True
 
@@ -2039,8 +2514,16 @@ print_res="within 6.0",
             f"Falha ao executar o cálculo MM-PBSA via gmx_MMPBSA: {e}"
         )
 
+    # Cria espelhos
+    final_dat = working_dir / out_dat_name
+    final_decomp = working_dir / out_decomp_name
+    if final_dat.exists():
+        shutil.copy2(final_dat, working_dir / "FINAL_RESULTS_MMPBSA.dat")
+    if final_decomp.exists():
+        shutil.copy2(final_decomp, working_dir / "FINAL_DECOMP_MMPBSA.dat")
+
     # 6. Parse dos resultados globais e decomposição por resíduo
-    summary_data = parse_mmpbsa_dat(dat_output)
+    summary_data = parse_mmpbsa_dat(final_dat)
     summary_data["thermodynamic_window"] = "60 - 100 ns (Últimos 40% - Estado Estacionário)"
     summary_data["startframe"] = startframe
     summary_data["endframe"] = endframe
@@ -2048,25 +2531,24 @@ print_res="within 6.0",
     summary_data["total_frames_estimated"] = total_frames
     summary_data["frames_analyzed"] = max(1, (endframe - startframe + 1) // interval)
     summary_data["protocol"] = "Dupla Escala Temporal (MM-PBSA 60-100 ns / Trajetória 0-100 ns)"
-    summary_data["raw_output_file"] = "FINAL_RESULTS_MMPBSA.dat"
+    summary_data["raw_output_file"] = out_dat_name
 
-    # Processa decomposição por resíduo se FINAL_DECOMP_MMPBSA.dat tiver sido gerado
     decomp_data = []
-    if decomp_dat_output.exists() and decomp_dat_output.stat().st_size > 0:
-        decomp_data = parse_mmpbsa_decomp(decomp_dat_output)
-    if not decomp_data and dat_output.exists():
-        decomp_data = parse_mmpbsa_decomp(dat_output)
+    if final_decomp.exists() and final_decomp.stat().st_size > 0:
+        decomp_data = parse_mmpbsa_decomp(final_decomp)
+    if not decomp_data and final_dat.exists():
+        decomp_data = parse_mmpbsa_decomp(final_dat)
 
     if decomp_data:
         summary_data["per_residue_decomposition"] = decomp_data
         summary_data["hotspot_residues"] = [r for r in decomp_data if r["total"] < 0][:10]
-        plot_mmpbsa_decomp(decomp_data, working_dir)
+        plot_mmpbsa_decomp(decomp_data, working_dir, target_id=target_id)
 
-    # Exporta todas as matrizes CSV para publicação
-    export_analysis_csv(working_dir)
+    export_analysis_csv(working_dir, target_id=target_id)
 
-    summary_json_path = working_dir / "mmpbsa_summary.json"
+    summary_json_path = working_dir / f"{prefix}mmpbsa_summary.json"
     with open(summary_json_path, "w", encoding="utf-8") as f:
         json.dump(summary_data, f, indent=2, ensure_ascii=False)
+    shutil.copy2(summary_json_path, working_dir / "mmpbsa_summary.json")
 
     return summary_data

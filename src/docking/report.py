@@ -6,14 +6,17 @@ from typing import Any, Dict, List, Optional, Tuple
 
 
 def _find_file(work_dir: Path, filenames: List[str]) -> Optional[Path]:
-    """Busca o primeiro arquivo correspondente na lista de nomes dentro do work_dir ou subdiretórios imediatos."""
+    """Busca o primeiro arquivo correspondente na lista de nomes dentro do work_dir ou subdiretórios imediatos (suporta prefixos de alvos)."""
     for fn in filenames:
         direct = work_dir / fn
         if direct.exists():
             return direct
+        prefixed = list(work_dir.glob(f"*_{fn}"))
+        if prefixed:
+            return prefixed[0]
     # Busca recursiva rasa (1 nível)
     for fn in filenames:
-        matches = list(work_dir.glob(f"*/{fn}"))
+        matches = list(work_dir.glob(f"*/{fn}")) or list(work_dir.glob(f"*/*_{fn}"))
         if matches:
             return matches[0]
     return None

@@ -1,24 +1,47 @@
+import os
+import shutil
 import subprocess
 from pathlib import Path
-from docking.md_prep import find_executable, DependencyError, SimulationPrepError
+from typing import Generator, Optional, Tuple
+
+from docking.md_prep import (
+    DependencyError,
+    SimulationPrepError,
+    find_executable,
+    sanitize_target_id,
+    verify_tpr_consistency,
+)
 
 
-def run_md_equilibration(md_dir: Path):
+def run_md_equilibration(
+    md_dir: Path, target_id: Optional[str] = None
+) -> Generator[Tuple[str, str], None, None]:
     """
-    Executa a etapa de Equilíbrio Termodinâmico (NVT e NPT) do sistema no GROMACS.
-    Retorna um gerador yielding (step_code, status).
+    Executa o Equilíbrio Termodinâmico (NVT e NPT) no GROMACS com isolamento estrito por alvo (Target Isolation),
+    controle estrito de erro no grompp e checagem de consistência pós-geração do TPR.
+
+    Retorna um gerador (etapa, status).
     """
     md_dir = Path(md_dir)
     if not md_dir.exists():
         raise FileNotFoundError(f"Diretório de trabalho não encontrado: {md_dir}")
 
+    # Identificação do alvo
+    if not target_id:
+        target_id = sanitize_target_id(md_dir.name)
+        if target_id.lower() in ("md_files", "screening", "data"):
+            # Tenta encontrar arquivos com prefixo no diretório
+            gro_files = list(md_dir.glob("*_em.gro"))
+            if gro_files:
+                target_id = gro_files[0].stem.replace("_em", "")
+    target_id = sanitize_target_id(target_id)
+    prefix = f"{target_id}_"
+
     gmx_bin = find_executable("gmx")
     if not gmx_bin:
-        raise DependencyError(
-            "O executável 'gmx' (GROMACS) não foi encontrado no PATH."
-        )
+        raise DependencyError("O executável 'gmx' (GROMACS) não foi encontrado no PATH.")
 
-    def run_command(cmd, cwd, input_val=None, step_name=""):
+    def run_command(cmd, cwd, input_val=None, step_name="", expect_zero_only=True):
         try:
             exec_name = cmd[0]
             exec_path = find_executable(exec_name)
@@ -28,9 +51,9 @@ def run_md_equilibration(md_dir: Path):
                 )
             cmd[0] = exec_path
 
-            import os
-
             env = os.environ.copy()
+            env.pop("PYTHONPATH", None)
+            env.pop("PYTHONHOME", None)
             exec_dir = str(Path(exec_path).parent)
             env["PATH"] = f"{exec_dir}{os.pathsep}{env.get('PATH', '')}"
 
@@ -45,13 +68,13 @@ def run_md_equilibration(md_dir: Path):
                 text=True,
                 input=input_val,
             )
-            if result.returncode != 0:
+            if expect_zero_only and result.returncode != 0:
                 error_msg = result.stderr.strip() or result.stdout.strip()
                 raise SimulationPrepError(
-                    f"Erro na {step_name}:\n"
+                    f"Erro estrito na {step_name}:\n"
                     f"Comando: {' '.join(cmd)}\n"
                     f"Código de retorno: {result.returncode}\n"
-                    f"Erro real: {error_msg}"
+                    f"Erro do GROMACS: {error_msg}"
                 )
             return result
         except Exception as e:
@@ -61,7 +84,7 @@ def run_md_equilibration(md_dir: Path):
                 f"Falha ao executar o comando da {step_name}: {e}"
             )
 
-    # Encontrar caminhos para NVT e NPT mdp dinamicamente
+    # Identificação dos arquivos mdp
     project_root = Path(__file__).resolve().parent.parent.parent
     nvt_mdp = project_root / "src" / "templates" / "mdp" / "nvt.mdp"
     npt_mdp = project_root / "src" / "templates" / "mdp" / "npt.mdp"
@@ -76,10 +99,26 @@ def run_md_equilibration(md_dir: Path):
         if not npt_mdp.exists():
             raise FileNotFoundError("Arquivo template npt.mdp não encontrado.")
 
+    # Localiza o arquivo de coordenadas de entrada (em.gro)
+    em_gro = md_dir / f"{prefix}em.gro"
+    if not em_gro.exists():
+        em_gro = md_dir / "em.gro"
+    if not em_gro.exists():
+        raise FileNotFoundError(
+            f"Arquivo de coordenadas minimizadas '{em_gro.name}' não encontrado em {md_dir}. "
+            "Execute a etapa de preparação/minimização primeiro."
+        )
+
+    topol_top = md_dir / f"{prefix}topol.top"
+    if not topol_top.exists():
+        topol_top = md_dir / "topol.top"
+    if not topol_top.exists():
+        raise FileNotFoundError(f"Arquivo 'topol.top' não encontrado em {md_dir}")
+
     # Etapa A: Geração do Índice (make_ndx)
     yield "A", "start"
-    cmd_make_ndx = [gmx_bin, "make_ndx", "-f", "em.gro", "-o", "index.ndx"]
-    # Executa apenas para salvar os grupos padrão em index.ndx
+    index_name = f"{prefix}index.ndx"
+    cmd_make_ndx = [gmx_bin, "make_ndx", "-f", str(em_gro.name), "-o", index_name]
     run_command(
         cmd_make_ndx,
         md_dir,
@@ -89,9 +128,9 @@ def run_md_equilibration(md_dir: Path):
 
     # Processa e anexa os grupos Protein_LIG e Water_and_ions programaticamente no arquivo index.ndx
     try:
-        index_path = md_dir / "index.ndx"
+        index_path = md_dir / index_name
         if not index_path.exists():
-            raise FileNotFoundError(f"Arquivo index.ndx não foi gerado em {md_dir}")
+            raise FileNotFoundError(f"Arquivo {index_name} não foi gerado em {md_dir}")
 
         groups = {}
         current_group = None
@@ -128,7 +167,6 @@ def run_md_equilibration(md_dir: Path):
 
         ions_atoms = groups.get("Ions", [])
         if not ions_atoms:
-            # Tenta combinar os grupos individuais de íons caso Ions não esteja presente
             ions_atoms = groups.get("NA", []) + groups.get("CL", [])
 
         water_ions_atoms = sol_atoms + ions_atoms
@@ -151,72 +189,87 @@ def run_md_equilibration(md_dir: Path):
         with open(index_path, "w", encoding="utf-8") as f:
             f.write(content)
 
+        # Espelho index.ndx
+        shutil.copy2(index_path, md_dir / "index.ndx")
+
     except Exception as e:
-        raise SimulationPrepError(f"Erro ao atualizar o arquivo index.ndx: {e}")
+        if isinstance(e, SimulationPrepError):
+            raise e
+        raise SimulationPrepError(f"Erro ao atualizar o arquivo de índice: {e}")
 
     yield "A", "success"
 
     # Etapa B: Compilação NVT (grompp)
     yield "B", "start"
+    nvt_tpr = md_dir / f"{prefix}nvt.tpr"
+    nvt_tpr.unlink(missing_ok=True)
+    (md_dir / "nvt.tpr").unlink(missing_ok=True)
+
     cmd_grompp_nvt = [
         gmx_bin,
         "grompp",
         "-f",
         str(nvt_mdp),
         "-c",
-        "em.gro",
+        str(em_gro.name),
         "-r",
-        "em.gro",
+        str(em_gro.name),
         "-p",
-        "topol.top",
+        str(topol_top.name),
         "-n",
-        "index.ndx",
+        index_name,
         "-o",
-        "nvt.tpr",
+        f"{prefix}nvt.tpr",
     ]
     run_command(cmd_grompp_nvt, md_dir, step_name="Etapa B (Compilação NVT)")
+    shutil.copy2(nvt_tpr, md_dir / "nvt.tpr")
+    verify_tpr_consistency(nvt_tpr)
     yield "B", "success"
 
     # Etapa C: Execução NVT (mdrun)
     yield "C", "start"
-    cmd_mdrun_nvt = [
-        gmx_bin,
-        "run" if "gmx" not in gmx_bin else "mdrun",
-        "-v",
-        "-deffnm",
-        "nvt",
-    ]
-    # We should ensure we call the correct mdrun
-    cmd_mdrun_nvt[0] = (
-        "mdrun"  # find_executable handles cmd[0] resolution inside run_command anyway.
-    )
-    cmd_mdrun_nvt = [gmx_bin, "mdrun", "-v", "-deffnm", "nvt"]
+    cmd_mdrun_nvt = [gmx_bin, "mdrun", "-v", "-deffnm", f"{prefix}nvt"]
     run_command(cmd_mdrun_nvt, md_dir, step_name="Etapa C (Execução NVT)")
+    if (md_dir / f"{prefix}nvt.gro").exists():
+        shutil.copy2(md_dir / f"{prefix}nvt.gro", md_dir / "nvt.gro")
     yield "C", "success"
 
     # Etapa D: Compilação NPT (grompp)
     yield "D", "start"
+    npt_tpr = md_dir / f"{prefix}npt.tpr"
+    npt_tpr.unlink(missing_ok=True)
+    (md_dir / "npt.tpr").unlink(missing_ok=True)
+
+    nvt_gro = md_dir / f"{prefix}nvt.gro"
+    if not nvt_gro.exists():
+        nvt_gro = md_dir / "nvt.gro"
+
     cmd_grompp_npt = [
         gmx_bin,
         "grompp",
         "-f",
         str(npt_mdp),
         "-c",
-        "nvt.gro",
+        str(nvt_gro.name),
         "-r",
-        "nvt.gro",
+        str(nvt_gro.name),
         "-p",
-        "topol.top",
+        str(topol_top.name),
         "-n",
-        "index.ndx",
+        index_name,
         "-o",
-        "npt.tpr",
+        f"{prefix}npt.tpr",
     ]
     run_command(cmd_grompp_npt, md_dir, step_name="Etapa D (Compilação NPT)")
+    shutil.copy2(npt_tpr, md_dir / "npt.tpr")
+    verify_tpr_consistency(npt_tpr)
     yield "D", "success"
 
     # Etapa E: Execução NPT (mdrun)
     yield "E", "start"
-    cmd_mdrun_npt = [gmx_bin, "mdrun", "-v", "-deffnm", "npt"]
+    cmd_mdrun_npt = [gmx_bin, "mdrun", "-v", "-deffnm", f"{prefix}npt"]
     run_command(cmd_mdrun_npt, md_dir, step_name="Etapa E (Execução NPT)")
+    if (md_dir / f"{prefix}npt.gro").exists():
+        shutil.copy2(md_dir / f"{prefix}npt.gro", md_dir / "npt.gro")
     yield "E", "success"
+

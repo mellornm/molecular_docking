@@ -1,92 +1,130 @@
-# Manual do Pipeline de Docking Molecular
+# Manual do Pipeline Integrado de Docking Molecular e Dinâmica Molecular (GROMACS)
 
-Este projeto automatiza fluxos de trabalho de docking molecular utilizando AutoDock Vina, Meeko e RDKit.
-
-O sistema suporta dois fluxos principais: Validação (Redocking) e Triagem Virtual (Screening).
+Este projeto automatiza de ponta a ponta o fluxo de trabalho de Docking Molecular, Triagem Virtual, Dinâmica Molecular (GROMACS) e Termodinâmica MM-PBSA.
 
 ---
 
-## Comandos Disponíveis
+## 🔒 Arquitetura de Segurança e Isolamento Estrito (Target Isolation)
 
-O pipeline é operado através do arquivo `src/main.py`.
+Para eliminar o risco de contaminação cruzada entre diferentes alvos biológicos e garantir reprodutibilidade estrita:
 
-### 0. interactive (Interface TUI)
-Inicia um menu interativo para execução das etapas do pipeline sem necessidade de argumentos de linha de comando.
+1. **Hierarquia Obrigatória por Alvo:**
+   - **Triagem Virtual:** `data/screening/<PDB_ID>/<LIGAND_NAME>/`
+   - **Dinâmica Molecular:** `data/md_files/<PDB_ID>/`
+   - **Exportação para Cluster Remoto:** `cluster_export/<PDB_ID>/`
+2. **Nomenclatura Explícita:** Todos os arquivos de simulação e análise possuem o prefixo do alvo (ex: `<PDB_ID>_complex.gro`, `<PDB_ID>_em.tpr`, `<PDB_ID>_nvt.tpr`, `<PDB_ID>_md.tpr`, `<PDB_ID>_md_fit.xtc`, `<PDB_ID>_mmpbsa_summary.json`).
+3. **Validação Fail-Fast:** Antes de executar etapas pesadas, o pipeline valida a presença da proteína e do ligante ($\ge 10$ átomos pesados) no complexo, e executa a verificação de integridade binária do TPR (`gmx dump -s`) contra arquivos corrompidos.
+4. **Purga Segura de Resíduos:** Detecta automaticamente arquivos residuais (`#*#`, `*.cpt`, `*.tpr`) antes de inicializar novas etapas para evitar leitura de checkpoints obsoletos.
 
-**Uso:**
+---
+
+## 🚀 Comandos Disponíveis (CLI)
+
+O pipeline pode ser executado via interface interativa TUI ou por comandos individuais no terminal:
+
+### 0. Modo Interativo (Recomendado)
 ```bash
 uv run src/main.py interactive
 ```
-Permite baixar ligantes do PubChem, preparar arquivos e executar dockings através de prompts no terminal.
 
----
-
-### 1. validate (Controle Positivo / Redocking)
-Valida a metodologia de docking comparando a pose gerada com a pose cristalográfica original.
-
-**Etapas executadas:**
-1. Download do arquivo PDB do RCSB.
-2. Separação de receptor e ligante nativo.
-3. Preparação dos arquivos em formato PDBQT.
-4. Cálculo do Grid Box baseado no centroide do ligante original.
-5. Execução do Vina e cálculo do RMSD final.
-
-**Exemplo de uso:**
+### 1. Triagem Virtual (Virtual Screening)
 ```bash
-python src/main.py validate --pdb 4HG7 --ex 16
-```
-- `--pdb`: Código PDB de 4 caracteres.
-- `--ex`: Exaustividade do Vina (padrão: 16).
-
----
-
-### 2. screen (Triagem Virtual / Virtual Screening)
-Executa o docking de novas moléculas contra um receptor preparado em coordenadas específicas.
-
-**Etapas executadas:**
-1. Criação de diretório de saída em `data/screening/{nome_do_ligante}`.
-2. Execução do docking utilizando as coordenadas de centro (`cx, cy, cz`) fornecidas.
-3. Extração da energia de afinidade (Score).
-
-**Exemplo de uso:**
-```bash
-python src/main.py screen --receptor data/4HG7/processed/receptor.pdbqt --ligand novo_composto.pdbqt --cx -24.0 --cy 6.5 --cz -14.2 --size 22.0
+uv run src/main.py screen --receptor data/7CFN/processed/7CFN_receptor.pdbqt --ligand ligante.pdbqt --target 7CFN --cx 12.5 --cy 8.2 --cz -15.4
 ```
 
-**Parâmetros:**
-- `--receptor`: Caminho para o receptor em formato `.pdbqt`.
-- `--ligand`: Caminho para o ligante em formato `.pdbqt`.
-- `--cx, --cy, --cz`: Coordenadas do centro do sítio ativo.
-- `--size`: Tamanho da caixa cúbica em Å (padrão: 22.0).
-- `--ex`: Exaustividade do Vina (padrão: 16).
+### 2. Preparação e Minimização de DM (`md-prep`)
+Prepara o complexo receptor-ligante, parametriza com ACPYPE/GAFF2, solvata e minimiza a energia:
+```bash
+uv run src/main.py md-prep --receptor data/7CFN/processed/7CFN_receptor.pdb --sdf data/screening/7CFN/Desoxicolato/docked_poses.sdf --target 7CFN
+```
+
+### 3. Equilíbrio Termodinâmico NVT / NPT (`md-equil`)
+Executa o equilíbrio com restrição de posição nos átomos pesados:
+```bash
+uv run src/main.py md-equil --dir data/md_files/7CFN --target 7CFN
+```
+
+### 4. Compilação de Produção & Pacote para Cluster (`md-compile`)
+Compila `<target_id>_md.tpr`, valida a consistência e gera o pacote modular em `cluster_export/<target_id>/`:
+```bash
+uv run src/main.py md-compile --dir data/md_files/7CFN --target 7CFN
+```
+
+### 5. Exportação Modular para Cluster (`md-export`)
+Empacota a simulação para execução via SSH em servidores remotos / tmux sem depender de Slurm:
+```bash
+uv run src/main.py md-export --dir data/md_files/7CFN --target 7CFN
+```
+
+### 6. Produção Local de DM (`md-run`)
+Executa a dinâmica de produção localmente (auto-detecta GPU/CPU):
+```bash
+uv run src/main.py md-run --dir data/md_files/7CFN --target 7CFN
+```
+
+### 7. Pós-Processamento, Gráficos e MM-PBSA (`md-postprocess`)
+Ajusta condições periódicas de contorno (PBC), calcula RMSD/RMSF/HBond/Rg/SASA e executa o cálculo de energia livre MM-PBSA (60 - 100 ns):
+```bash
+uv run src/main.py md-postprocess --dir data/md_files/7CFN --target 7CFN
+```
+
+### 8. Relatório Executivo HTML e Visualização 3D (`report`)
+Gera o relatório consolidado de publicação e script PyMOL 3D:
+```bash
+uv run src/main.py report --dir data/md_files/7CFN --receptor 7CFN --ligand Desoxicolato
+```
 
 ---
 
-## Estrutura de Arquivos
+## 🖥️ Execução em Servidor/Cluster Remoto (SSH / tmux)
 
-- `bin/`: Executável do AutoDock Vina.
-- `data/`: Armazenamento de entradas e resultados.
-  - `<PDB_ID>/`: Dados do fluxo `validate`.
-  - `screening/<LIGAND_NAME>/`: Dados do fluxo `screen`.
-- `src/`: Código-fonte.
-  - `docking/preparation.py`: Conversão e preparação de estruturas.
-  - `docking/vina_runner.py`: Interface de execução do Vina.
-  - `docking/analysis.py`: Cálculo de RMSD e extração de scores.
+O pacote exportado em `cluster_export/<PDB_ID>/` é 100% autossuficiente:
+
+```bash
+# 1. Enviar para o servidor
+rsync -avP cluster_export/7CFN/ user@cluster:/path/to/simulations/7CFN/
+
+# 2. Conectar e abrir sessão tmux
+ssh user@cluster
+tmux new -s md_7CFN
+cd /path/to/simulations/7CFN
+
+# 3. Executar o script inteligente (auto-detecta GPU e suporta retomada -cpi)
+./run_local.sh
+
+# 4. Desanexar do tmux: Ctrl+B, depois D
+# 5. Acompanhar em tempo real:
+tail -f 7CFN_md.log
+```
 
 ---
 
-## Instalação e Requisitos
+## 📦 Estrutura de Diretórios Gerada
 
-1. **Python 3.13+**
-2. **Dependências:** Gerenciadas via `uv`.
-   ```bash
-   uv sync
-   ```
-3. **Ambiente:** O executável `vina.exe` deve estar presente na pasta `bin/`.
-
----
-
-## Interpretação de Resultados
-
-- **Score (kcal/mol):** Indica a afinidade teórica (valores mais baixos indicam maior afinidade).
-- **RMSD (Å):** Disponível apenas no comando `validate`. Valores ≤ 2.0 Å indicam precisão na predição da pose experimental.
+```text
+molecular_docking/
+├── cluster_export/
+│   └── 7CFN/
+│       ├── 7CFN_md.tpr
+│       ├── run_local.sh
+│       └── README.md
+├── data/
+│   ├── 7CFN/
+│   │   ├── raw/
+│   │   └── processed/
+│   ├── screening/
+│   │   └── 7CFN/
+│   │       └── Desoxicolato/
+│   └── md_files/
+│       └── 7CFN/
+│           ├── 7CFN_complex.gro
+│           ├── 7CFN_topol.top
+│           ├── 7CFN_em.tpr / 7CFN_em.gro
+│           ├── 7CFN_nvt.tpr / 7CFN_nvt.gro
+│           ├── 7CFN_npt.tpr / 7CFN_npt.gro
+│           ├── 7CFN_md.tpr / 7CFN_md.xtc
+│           ├── 7CFN_md_fit.xtc / 7CFN_md_clean.gro
+│           ├── 7CFN_rmsd.png / 7CFN_rmsf.png / 7CFN_hbond.png
+│           ├── 7CFN_FINAL_RESULTS_MMPBSA.dat
+│           └── 7CFN_mmpbsa_summary.json
+```
