@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -1611,6 +1612,129 @@ def _ensure_gmx_mmpbsa_cys_patched() -> None:
         pass
 
 
+def _ensure_ligand_mol2(working_dir: Path, lig_idx: int) -> Optional[Path]:
+    """
+    Garante a disponibilidade de um arquivo .mol2 parametrizado com GAFF/GAFF2
+    para o ligante, necessário para a geração de topologias AMBER via tleap no gmx_MMPBSA.
+
+    1. Busca por arquivos .mol2 existentes no diretório de trabalho e subdiretórios (ex: ligand_md.acpype/).
+    2. Busca no diretório pai ou na árvore de dados.
+    3. Se não encontrar, tenta gerar automaticamente via ACPYPE a partir de ligand_md.pdb
+       ou extraindo as coordenadas do ligante via gmx trjconv.
+    """
+    working_dir = Path(working_dir)
+
+    # 1. Procura em working_dir
+    local_candidates = [
+        p
+        for p in working_dir.glob("**/*.mol2")
+        if not p.name.startswith("_GMXMMPBSA_")
+        and not p.parent.name.startswith("_GMXMMPBSA_")
+    ]
+    for pattern in ["*_bcc_gaff2.mol2", "*_AC.mol2", "*.mol2"]:
+        for p in local_candidates:
+            if p.match(pattern):
+                return p
+
+    # 2. Procura no diretório pai (ex: data/ ou workspace)
+    try:
+        parent_candidates = [
+            p
+            for p in working_dir.parent.glob("**/*.mol2")
+            if not p.name.startswith("_GMXMMPBSA_")
+            and not p.parent.name.startswith("_GMXMMPBSA_")
+        ]
+        for pattern in ["*_bcc_gaff2.mol2", "*_AC.mol2", "*.mol2"]:
+            for p in parent_candidates:
+                if p.match(pattern):
+                    target_dir = working_dir / "ligand_md.acpype"
+                    target_dir.mkdir(parents=True, exist_ok=True)
+                    dest = target_dir / p.name
+                    if not dest.exists():
+                        shutil.copy2(p, dest)
+                    return dest
+    except Exception:
+        pass
+
+    # 3. Geração automatizada via ACPYPE
+    acpype_bin = find_executable("acpype")
+    if not acpype_bin:
+        return None
+
+    ligand_pdb_path = working_dir / "ligand_md.pdb"
+    if not ligand_pdb_path.exists():
+        # 3.1 Tenta extrair a partir de md.tpr + index.ndx usando gmx trjconv
+        gmx_bin = find_executable("gmx")
+        tpr_file = working_dir / "md.tpr"
+        index_file = working_dir / "index.ndx"
+        if gmx_bin and tpr_file.exists() and index_file.exists():
+            try:
+                env = os.environ.copy()
+                exec_dir = str(Path(gmx_bin).parent)
+                env["PATH"] = f"{exec_dir}{os.pathsep}{env.get('PATH', '')}"
+                subprocess.run(
+                    [
+                        gmx_bin,
+                        "trjconv",
+                        "-f",
+                        "md.tpr",
+                        "-s",
+                        "md.tpr",
+                        "-o",
+                        "ligand_md.pdb",
+                        "-n",
+                        "index.ndx",
+                        "-dump",
+                        "0",
+                    ],
+                    cwd=str(working_dir),
+                    input=f"{lig_idx}\n".encode(),
+                    env=env,
+                    capture_output=True,
+                    check=True,
+                )
+            except Exception:
+                pass
+
+        # 3.2 Se ainda não existe, tenta converter a partir de algum arquivo de ligante (.sdf/.pdbqt/.pdb)
+        if not ligand_pdb_path.exists():
+            for ext in ["*.sdf", "*.mol2", "*.pdbqt"]:
+                for parent_lig in working_dir.parent.glob(ext):
+                    try:
+                        from docking.md_prep import export_ligand_pdb
+
+                        export_ligand_pdb(parent_lig, working_dir)
+                        break
+                    except Exception:
+                        pass
+                if ligand_pdb_path.exists():
+                    break
+
+    if ligand_pdb_path.exists():
+        try:
+            env = os.environ.copy()
+            acpype_dir = str(Path(acpype_bin).parent)
+            env["PATH"] = f"{acpype_dir}{os.pathsep}{env.get('PATH', '')}"
+            subprocess.run(
+                [acpype_bin, "-i", ligand_pdb_path.name, "-c", "bcc", "-f"],
+                cwd=str(working_dir),
+                env=env,
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            acpype_folder = working_dir / f"{ligand_pdb_path.stem}.acpype"
+            if acpype_folder.exists():
+                for f in acpype_folder.glob("*_bcc_gaff2.mol2"):
+                    return f
+                for f in acpype_folder.glob("*.mol2"):
+                    return f
+        except Exception:
+            pass
+
+    return None
+
+
 def calculate_mmpbsa(working_dir: Path) -> Dict[str, Any]:
     """
     Executa o cálculo de Energia Livre de Ligação MM-PBSA via gmx_MMPBSA (Janela Termodinâmica: 60 - 100 ns / Últimos 40%):
@@ -1694,15 +1818,17 @@ def calculate_mmpbsa(working_dir: Path) -> Dict[str, Any]:
         total_frames = 1000
 
     # Limpa arquivos temporários e topologias de execuções anteriores para evitar conflitos
-    for stale_file in list(working_dir.glob("_GMXMMPBSA_*")) + [
+    for stale_item in list(working_dir.glob("_GMXMMPBSA_*")) + [
         working_dir / "COM.prmtop",
         working_dir / "REC.prmtop",
         working_dir / "LIG.prmtop",
         working_dir / "COM_traj_0.xtc",
     ]:
         try:
-            if stale_file.is_file():
-                stale_file.unlink(missing_ok=True)
+            if stale_item.is_file():
+                stale_item.unlink(missing_ok=True)
+            elif stale_item.is_dir():
+                shutil.rmtree(stale_item, ignore_errors=True)
         except Exception:
             pass
 
@@ -1743,8 +1869,18 @@ print_res="within 6.0",
     groups_list = get_index_groups(index_file)
     _, _, rec_idx, lig_idx = identify_complex_groups(groups_list)
 
-    # 4. Execução do gmx_MMPBSA
-    cmd_mmpbsa = [
+    # Identifica ou gera o arquivo mol2 parametrizado do ligante (ACPYPE / GAFF2)
+    ligand_mol2 = _ensure_ligand_mol2(working_dir, lig_idx)
+
+    # 4. Execução do gmx_MMPBSA (com aceleração paralela via MPI se disponível)
+    cmd_mmpbsa = []
+    mpirun_bin = find_executable("mpirun")
+    if mpirun_bin:
+        num_cores = max(1, min(8, (os.cpu_count() or 4) - 1))
+        if num_cores > 1:
+            cmd_mmpbsa.extend([mpirun_bin, "-np", str(num_cores)])
+
+    cmd_mmpbsa.extend([
         mmpbsa_bin,
         "-O",
         "-nogui",
@@ -1765,18 +1901,10 @@ print_res="within 6.0",
         "FINAL_DECOMP_MMPBSA.dat",
         "-eo",
         "FINAL_RESULTS_MMPBSA.csv",
-    ]
+    ])
 
-    # Identifica o arquivo mol2 parametrizado do ligante (gerado pelo ACPYPE)
-    mol2_candidates = (
-        list(working_dir.glob("*/*_bcc_gaff2.mol2"))
-        + list(working_dir.glob("*_bcc_gaff2.mol2"))
-        + list(working_dir.glob("*/*_AC.mol2"))
-        + list(working_dir.glob("*/*.mol2"))
-        + list(working_dir.glob("*.mol2"))
-    )
-    if mol2_candidates:
-        mol2_rel = mol2_candidates[0].resolve().relative_to(working_dir.resolve())
+    if ligand_mol2:
+        mol2_rel = ligand_mol2.resolve().relative_to(working_dir.resolve())
         cmd_mmpbsa.extend(["-lm", str(mol2_rel).replace("\\", "/")])
 
     try:
