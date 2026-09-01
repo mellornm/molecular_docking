@@ -1219,6 +1219,7 @@ def parse_mmpbsa_decomp(decomp_path: Path) -> List[Dict[str, Any]]:
                         apolar_mean = float(parts[13])
                         total_mean = float(parts[16])
                         total_std = float(parts[17]) if len(parts) > 17 and parts[17] else 0.0
+                        total_sem = float(parts[18]) if len(parts) > 18 and parts[18] else 0.0
 
                         residues_data.append({
                             "residue": res_raw,
@@ -1228,6 +1229,7 @@ def parse_mmpbsa_decomp(decomp_path: Path) -> List[Dict[str, Any]]:
                             "nonpolar": round(apolar_mean, 3),
                             "total": round(total_mean, 3),
                             "std": round(total_std, 3),
+                            "sem": round(total_sem, 3),
                         })
                         continue
                     except ValueError:
@@ -1266,6 +1268,7 @@ def parse_mmpbsa_decomp(decomp_path: Path) -> List[Dict[str, Any]]:
                             "electrostatic": round(eel_mean, 3),
                             "total": round(total_mean, 3),
                             "std": round(total_std, 3),
+                            "sem": 0.0,
                         })
                     except ValueError:
                         continue
@@ -1281,6 +1284,7 @@ def parse_mmpbsa_decomp(decomp_path: Path) -> List[Dict[str, Any]]:
                             "electrostatic": 0.0,
                             "total": round(total_mean, 3),
                             "std": 0.0,
+                            "sem": 0.0,
                         })
                     except ValueError:
                         continue
@@ -1310,17 +1314,36 @@ def plot_mmpbsa_decomp(decomp_data: List[Dict[str, Any]], working_dir: Path) -> 
     labels = []
     for r in plot_items:
         raw_res = r.get("residue", "").strip()
-        if raw_res.startswith("R:") or raw_res.startswith("L:"):
-            raw_res = raw_res[2:]
-        labels.append(raw_res.replace(":", " ").strip())
+        parts = raw_res.split(":")
+        if len(parts) == 4 and parts[0] == "R":
+            chain, resname, resnum = parts[1], parts[2], parts[3]
+            labels.append(f"{resname} {resnum} (Chain {chain})")
+        elif len(parts) == 4 and parts[0] == "L":
+            resname, resnum = parts[2], parts[3]
+            labels.append(f"Ligand ({resname} {resnum})")
+        else:
+            clean = raw_res
+            if clean.startswith("R:") or clean.startswith("L:"):
+                clean = clean[2:]
+            labels.append(clean.replace(":", " ").strip())
+
     totals = [r["total"] for r in plot_items]
-    stds = [r.get("std", 0.0) for r in plot_items]
+    sems = [r.get("sem", 0.0) for r in plot_items]
     colors = ["#2a9d8f" if v < 0 else "#e76f51" for v in totals]
 
-    fig, ax = plt.subplots(figsize=(8.5, max(4.5, len(labels) * 0.32)), dpi=300)
+    fig, ax = plt.subplots(figsize=(8.5, max(4.5, len(labels) * 0.35)), dpi=300)
     y_pos = list(range(len(labels)))
-    has_errors = any(s > 0 for s in stds)
-    bars = ax.barh(y_pos, totals, xerr=stds if has_errors else None, color=colors, alpha=0.88, edgecolor="black", linewidth=0.6, capsize=3)
+    has_errors = any(s > 0 for s in sems)
+    bars = ax.barh(
+        y_pos,
+        totals,
+        xerr=sems if has_errors else None,
+        color=colors,
+        alpha=0.88,
+        edgecolor="black",
+        linewidth=0.6,
+        capsize=3,
+    )
 
     ax.set_yticks(y_pos)
     ax.set_yticklabels(labels, fontweight="bold")
@@ -1441,13 +1464,14 @@ def export_analysis_csv(working_dir: Path) -> Dict[str, Path]:
         if decomp_data:
             decomp_csv_path = working_dir / "decomp_mmpbsa.csv"
             with open(decomp_csv_path, "w", encoding="utf-8") as f:
-                f.write("Residue,Van_der_Waals_kcal_mol,Electrostatic_kcal_mol,Total_DeltaG_kcal_mol,Std_kcal_mol\n")
+                f.write(
+                    "Residue,Van_der_Waals_kcal_mol,Electrostatic_kcal_mol,Polar_Solvation_kcal_mol,Nonpolar_Solvation_kcal_mol,Total_DeltaG_kcal_mol,Std_kcal_mol,SEM_kcal_mol\n"
+                )
                 for d in decomp_data:
                     raw_res = d.get("residue", "").strip()
-                    if raw_res.startswith("R:") or raw_res.startswith("L:"):
-                        raw_res = raw_res[2:]
-                    res_clean = raw_res.replace(":", " ").strip()
-                    f.write(f'"{res_clean}",{d.get("vdw", 0.0):.3f},{d.get("electrostatic", 0.0):.3f},{d.get("total", 0.0):.3f},{d.get("std", 0.0):.3f}\n')
+                    f.write(
+                        f'"{raw_res}",{d.get("vdw", 0.0):.3f},{d.get("electrostatic", 0.0):.3f},{d.get("polar", 0.0):.3f},{d.get("nonpolar", 0.0):.3f},{d.get("total", 0.0):.3f},{d.get("std", 0.0):.3f},{d.get("sem", 0.0):.3f}\n'
+                    )
             exported_csvs["decomp"] = decomp_csv_path
 
     # 7. Ocupação de Pontes de Hidrogênio
@@ -1577,11 +1601,13 @@ def parse_mmpbsa_dat(dat_path: Path) -> Dict[str, Any]:
     return summary
 
 
-def _ensure_gmx_mmpbsa_cys_patched() -> None:
+def _ensure_gmx_mmpbsa_patched() -> None:
     """
-    Verifica e aplica auto-patch no arquivo make_top.py do pacote gmx_MMPBSA caso detecte
-    o bug de indexação de pontes dissulfeto em sistemas proteicos multicadeia.
+    Verifica e aplica auto-patch no pacote gmx_MMPBSA:
+    1. make_top.py: Corrige o bug de indexação de pontes dissulfeto em sistemas proteicos multicadeia.
+    2. utils.py: Envolve os.remove em try/except para evitar erros de FileNotFoundError (race condition em MPI).
     """
+    # Patch 1: Suporte multicadeia CYS em make_top.py
     try:
         import GMXMMPBSA.make_top as mt
 
@@ -1608,6 +1634,30 @@ def _ensure_gmx_mmpbsa_cys_patched() -> None:
                 code = code.replace(target, replacement)
                 with open(make_top_path, "w", encoding="utf-8") as f:
                     f.write(code)
+    except Exception:
+        pass
+
+    # Patch 2: Remoção segura de arquivos em utils.py para evitar FileNotFoundError em MPI concorrente
+    try:
+        import GMXMMPBSA.utils as mu
+
+        utils_path = Path(mu.__file__)
+        if utils_path.exists():
+            with open(utils_path, "r", encoding="utf-8") as f:
+                code_u = f.read()
+
+            if "os.remove(fil)" in code_u:
+                target_str = "            os.remove(fil)"
+                safe_str = (
+                    "            try:\n"
+                    "                os.remove(fil)\n"
+                    "            except OSError:\n"
+                    "                pass"
+                )
+                if target_str in code_u and "try:" not in code_u.split("def remove(")[1].split("def ")[0]:
+                    code_u = code_u.replace(target_str, safe_str)
+                    with open(utils_path, "w", encoding="utf-8") as f:
+                        f.write(code_u)
     except Exception:
         pass
 
@@ -1735,15 +1785,17 @@ def _ensure_ligand_mol2(working_dir: Path, lig_idx: int) -> Optional[Path]:
     return None
 
 
-def calculate_mmpbsa(working_dir: Path) -> Dict[str, Any]:
+def calculate_mmpbsa(working_dir: Path, force: bool = False) -> Dict[str, Any]:
     """
     Executa o cálculo de Energia Livre de Ligação MM-PBSA via gmx_MMPBSA (Janela Termodinâmica: 60 - 100 ns / Últimos 40%):
-    1. Extrai o número total de frames e configura dinamicamente o arquivo 'mmpbsa.in' para os últimos 40% (estado estacionário).
+    1. Se os resultados já foram previamente calculados e force=False, reutiliza os dados existentes sem recalcular.
+    2. Realiza a limpeza em processo único de quaisquer artefatos e arquivos residuais antes da invocação do MPI.
+    3. Extrai o número total de frames e configura dinamicamente o arquivo 'mmpbsa.in' para os últimos 40% (estado estacionário).
        Ex: para 1000 frames totais, define startframe=600, endframe=1000, interval=2.
-    2. Identifica os grupos do receptor (Protein) e ligante (ligand_md / LIG) em index.ndx.
-    3. Executa o gmx_MMPBSA via subprocesso não-interativo com captura de stderr.
-    4. Extrai contribuições energéticas (Van der Waals, Eletrostática, Solvatação Polar e Apolar) e Delta G total.
-    5. Salva os resultados estruturados no arquivo mmpbsa_summary.json.
+    4. Identifica os grupos do receptor (Protein) e ligante (ligand_md / LIG) em index.ndx.
+    5. Executa o gmx_MMPBSA de forma paralela via MPI com mitigação de race condition e tolerância a falhas.
+    6. Extrai contribuições energéticas (Van der Waals, Eletrostática, Solvatação Polar e Apolar) e Delta G total.
+    7. Gera gráficos científicos (.png a 300 DPI), matrizes CSV e salva mmpbsa_summary.json.
 
     Retorna o dicionário com o sumário dos resultados termodinâmicos.
     """
@@ -1754,6 +1806,8 @@ def calculate_mmpbsa(working_dir: Path) -> Dict[str, Any]:
     tpr_file = working_dir / "md.tpr"
     fit_xtc = working_dir / "md_fit.xtc"
     index_file = working_dir / "index.ndx"
+    dat_output = working_dir / "FINAL_RESULTS_MMPBSA.dat"
+    decomp_dat_output = working_dir / "FINAL_DECOMP_MMPBSA.dat"
 
     if not tpr_file.exists():
         raise FileNotFoundError(f"Arquivo 'md.tpr' não encontrado em: {working_dir}")
@@ -1765,12 +1819,39 @@ def calculate_mmpbsa(working_dir: Path) -> Dict[str, Any]:
     if not index_file.exists():
         raise FileNotFoundError(f"Arquivo 'index.ndx' não encontrado em: {working_dir}")
 
+    # Reutilização imediata de cálculos já concluídos com sucesso (evita reexecução desnecessária de ~1h)
+    if not force and dat_output.exists() and dat_output.stat().st_size > 0:
+        existing_summary = parse_mmpbsa_dat(dat_output)
+        if existing_summary.get("energies", {}).get("delta_g_binding", {}).get("mean", 0.0) != 0.0:
+            decomp_data = []
+            if decomp_dat_output.exists() and decomp_dat_output.stat().st_size > 0:
+                decomp_data = parse_mmpbsa_decomp(decomp_dat_output)
+            if not decomp_data and dat_output.exists():
+                decomp_data = parse_mmpbsa_decomp(dat_output)
+
+            existing_summary["thermodynamic_window"] = "60 - 100 ns (Últimos 40% - Estado Estacionário)"
+            existing_summary["protocol"] = "Dupla Escala Temporal (MM-PBSA 60-100 ns / Trajetória 0-100 ns)"
+            existing_summary["raw_output_file"] = "FINAL_RESULTS_MMPBSA.dat"
+
+            if decomp_data:
+                existing_summary["per_residue_decomposition"] = decomp_data
+                existing_summary["hotspot_residues"] = [r for r in decomp_data if r["total"] < 0][:10]
+                plot_mmpbsa_decomp(decomp_data, working_dir)
+
+            export_analysis_csv(working_dir)
+
+            summary_json_path = working_dir / "mmpbsa_summary.json"
+            with open(summary_json_path, "w", encoding="utf-8") as f:
+                json.dump(existing_summary, f, indent=2, ensure_ascii=False)
+
+            return existing_summary
+
     mmpbsa_bin = find_executable("gmx_MMPBSA")
     if not mmpbsa_bin:
         raise DependencyError("O executável 'gmx_MMPBSA' não foi encontrado no PATH.")
 
-    # Garante que o patch de suporte a sistemas multicadeia esteja ativo
-    _ensure_gmx_mmpbsa_cys_patched()
+    # Garante que os patches no gmx_MMPBSA (multicadeia CYS e safe unlink MPI) estejam aplicados
+    _ensure_gmx_mmpbsa_patched()
 
     # 1. Identificação do número de frames e cálculo da janela de equilíbrio (Últimos 40%)
     total_frames = None
@@ -1817,20 +1898,33 @@ def calculate_mmpbsa(working_dir: Path) -> Dict[str, Any]:
     if total_frames is None or total_frames <= 0:
         total_frames = 1000
 
-    # Limpa arquivos temporários e topologias de execuções anteriores para evitar conflitos
-    for stale_item in list(working_dir.glob("_GMXMMPBSA_*")) + [
-        working_dir / "COM.prmtop",
-        working_dir / "REC.prmtop",
-        working_dir / "LIG.prmtop",
-        working_dir / "COM_traj_0.xtc",
-    ]:
-        try:
-            if stale_item.is_file():
-                stale_item.unlink(missing_ok=True)
-            elif stale_item.is_dir():
-                shutil.rmtree(stale_item, ignore_errors=True)
-        except Exception:
-            pass
+    # 2. Limpeza atômica em processo único de arquivos de execuções anteriores
+    # Isso impede que múltiplos processos MPI executem 'os.remove' concorrentemente
+    stale_patterns = [
+        "_GMXMMPBSA_*",
+        "FINAL_RESULTS_MMPBSA.*",
+        "FINAL_DECOMP_MMPBSA.*",
+        "RESULTS_gmx_MMPBSA.h5",
+        "COM.prmtop",
+        "REC.prmtop",
+        "LIG.prmtop",
+        "COM_traj_*",
+        "reference.pdb",
+        "mmpbsa_summary.json",
+        "decomp_mmpbsa.png",
+        "decomp_mmpbsa.csv",
+        "*.inpcrd",
+        "*.mdcrd*",
+    ]
+    for pattern in stale_patterns:
+        for stale_item in working_dir.glob(pattern):
+            try:
+                if stale_item.is_file():
+                    stale_item.unlink(missing_ok=True)
+                elif stale_item.is_dir():
+                    shutil.rmtree(stale_item, ignore_errors=True)
+            except Exception:
+                pass
 
     # Protocolo de Janela Termodinâmica: Últimos 40% (ex: 6001 a 10001 para 10001 frames totais)
     startframe = max(1, int(round(total_frames * 0.60)))
@@ -1843,7 +1937,7 @@ def calculate_mmpbsa(working_dir: Path) -> Dict[str, Any]:
     elif interval < 1:
         interval = 1
 
-    # 2. Criação do arquivo de entrada mmpbsa.in (MM-GBSA com Decomposição por Resíduo OBC2)
+    # 3. Criação do arquivo de entrada mmpbsa.in (MM-GBSA com Decomposição por Resíduo OBC2)
     mmpbsa_in_path = working_dir / "mmpbsa.in"
     mmpbsa_in_content = f"""&general
 sys_name="Protein_Ligand_Complex",
@@ -1865,14 +1959,14 @@ print_res="within 6.0",
     with open(mmpbsa_in_path, "w", encoding="utf-8") as f:
         f.write(mmpbsa_in_content)
 
-    # 3. Identificação dos índices dos grupos no index.ndx
+    # 4. Identificação dos índices dos grupos no index.ndx
     groups_list = get_index_groups(index_file)
     _, _, rec_idx, lig_idx = identify_complex_groups(groups_list)
 
     # Identifica ou gera o arquivo mol2 parametrizado do ligante (ACPYPE / GAFF2)
     ligand_mol2 = _ensure_ligand_mol2(working_dir, lig_idx)
 
-    # 4. Execução do gmx_MMPBSA (com aceleração paralela via MPI se disponível)
+    # 5. Execução do gmx_MMPBSA (com aceleração paralela via MPI se disponível)
     cmd_mmpbsa = []
     mpirun_bin = find_executable("mpirun")
     if mpirun_bin:
@@ -1918,7 +2012,15 @@ print_res="within 6.0",
         result = subprocess.run(
             cmd_mmpbsa, cwd=str(working_dir), env=env, capture_output=True, text=True
         )
-        if result.returncode != 0:
+
+        # Verificação resiliente de integridade dos resultados gerados
+        is_successful = False
+        if dat_output.exists() and dat_output.stat().st_size > 0:
+            parsed_test = parse_mmpbsa_dat(dat_output)
+            if parsed_test.get("energies", {}).get("delta_g_binding", {}).get("mean", 0.0) != 0.0:
+                is_successful = True
+
+        if not is_successful and result.returncode != 0:
             error_msg = result.stderr.strip() or result.stdout.strip()
             raise SimulationPrepError(
                 f"Erro na execução do gmx_MMPBSA:\n"
@@ -1933,8 +2035,7 @@ print_res="within 6.0",
             f"Falha ao executar o cálculo MM-PBSA via gmx_MMPBSA: {e}"
         )
 
-    # 5. Parse dos resultados globais e decomposição por resíduo
-    dat_output = working_dir / "FINAL_RESULTS_MMPBSA.dat"
+    # 6. Parse dos resultados globais e decomposição por resíduo
     summary_data = parse_mmpbsa_dat(dat_output)
     summary_data["thermodynamic_window"] = "60 - 100 ns (Últimos 40% - Estado Estacionário)"
     summary_data["startframe"] = startframe
@@ -1946,8 +2047,9 @@ print_res="within 6.0",
     summary_data["raw_output_file"] = "FINAL_RESULTS_MMPBSA.dat"
 
     # Processa decomposição por resíduo se FINAL_DECOMP_MMPBSA.dat tiver sido gerado
-    decomp_dat_output = working_dir / "FINAL_DECOMP_MMPBSA.dat"
-    decomp_data = parse_mmpbsa_decomp(decomp_dat_output)
+    decomp_data = []
+    if decomp_dat_output.exists() and decomp_dat_output.stat().st_size > 0:
+        decomp_data = parse_mmpbsa_decomp(decomp_dat_output)
     if not decomp_data and dat_output.exists():
         decomp_data = parse_mmpbsa_decomp(dat_output)
 
@@ -1955,6 +2057,9 @@ print_res="within 6.0",
         summary_data["per_residue_decomposition"] = decomp_data
         summary_data["hotspot_residues"] = [r for r in decomp_data if r["total"] < 0][:10]
         plot_mmpbsa_decomp(decomp_data, working_dir)
+
+    # Exporta todas as matrizes CSV para publicação
+    export_analysis_csv(working_dir)
 
     summary_json_path = working_dir / "mmpbsa_summary.json"
     with open(summary_json_path, "w", encoding="utf-8") as f:

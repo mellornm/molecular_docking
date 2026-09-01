@@ -4,7 +4,10 @@ import json
 import time
 from pathlib import Path
 
-import questionary
+try:
+    import questionary
+except ImportError:
+    questionary = None  # type: ignore[assignment]
 import typer
 from rich.console import Console
 from rich.panel import Panel
@@ -652,6 +655,15 @@ def screen(
 @app.command(name="interactive")
 def interactive():
     """Interface interativa (TUI) para facilitar o uso do pipeline."""
+    if questionary is None:
+        console.print(
+            "[bold red]Erro ao carregar a interface interativa:[/bold red] O pacote 'questionary' / 'prompt_toolkit' não está disponível.\n"
+            "[yellow]Execute o pipeline através do gerenciador de pacotes do projeto:[/yellow]\n"
+            "  [cyan]uv run src/main.py interactive[/cyan]\n"
+            "Ou instale as dependências com: [cyan]uv sync[/cyan]"
+        )
+        raise typer.Exit(code=1)
+
     while True:
         choice = questionary.select(
             "O que você deseja fazer?",

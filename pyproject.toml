@@ -13,6 +13,7 @@ dependencies = [
     "typer[all]",
     "rich",
     "questionary",
+    "prompt-toolkit>=3.0.38",
     "ruff>=0.15.20",
     "openmm>=8.5.2",
     "pdbfixer>=1.12.0",
