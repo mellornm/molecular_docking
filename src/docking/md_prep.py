@@ -122,6 +122,8 @@ def run_acpype(ligand_pdb: Path, output_dir: Path):
     import os
 
     env = os.environ.copy()
+    env.pop("PYTHONPATH", None)
+    env.pop("PYTHONHOME", None)
     acpype_dir = str(Path(acpype_bin).parent)
     env["PATH"] = f"{acpype_dir}{os.pathsep}{env.get('PATH', '')}"
 

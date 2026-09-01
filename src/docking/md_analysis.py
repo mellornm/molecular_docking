@@ -1763,6 +1763,8 @@ def _ensure_ligand_mol2(working_dir: Path, lig_idx: int) -> Optional[Path]:
     if ligand_pdb_path.exists():
         try:
             env = os.environ.copy()
+            env.pop("PYTHONPATH", None)
+            env.pop("PYTHONHOME", None)
             acpype_dir = str(Path(acpype_bin).parent)
             env["PATH"] = f"{acpype_dir}{os.pathsep}{env.get('PATH', '')}"
             subprocess.run(
@@ -2003,6 +2005,8 @@ print_res="within 6.0",
 
     try:
         env = os.environ.copy()
+        env.pop("PYTHONPATH", None)
+        env.pop("PYTHONHOME", None)
         exec_dir = str(Path(mmpbsa_bin).parent)
         system_paths = ["/usr/bin", "/bin", "/usr/local/bin"]
         env["PATH"] = (
