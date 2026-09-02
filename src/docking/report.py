@@ -111,6 +111,41 @@ def parse_pipeline_artifacts(work_dir: Path) -> Tuple[Dict[str, Any], List[str]]
     interactions_file = _find_file(work_dir, ["interactions.json"])
     pharmacokinetics_file = _find_file(work_dir, ["pharmacokinetics.json"])
 
+    if not interactions_file:
+        for parent in [work_dir] + list(work_dir.parents):
+            # Procura em screening/<target_id>, screening, ou <target_id>/results
+            candidates = [
+                parent / "screening" / work_dir.name / "results",
+                parent / "screening" / work_dir.name,
+                parent / "screening",
+                parent / work_dir.name / "results",
+                parent / "results",
+            ]
+            for cand in candidates:
+                if cand.exists():
+                    interactions_file = _find_file(cand, ["interactions.json"])
+                    if interactions_file:
+                        break
+            if interactions_file:
+                break
+
+    if not pharmacokinetics_file:
+        for parent in [work_dir] + list(work_dir.parents):
+            candidates = [
+                parent / "screening" / work_dir.name / "results",
+                parent / "screening" / work_dir.name,
+                parent / "screening",
+                parent / work_dir.name / "results",
+                parent / "results",
+            ]
+            for cand in candidates:
+                if cand.exists():
+                    pharmacokinetics_file = _find_file(cand, ["pharmacokinetics.json"])
+                    if pharmacokinetics_file:
+                        break
+            if pharmacokinetics_file:
+                break
+
     if interactions_file and interactions_file.exists():
         try:
             with open(interactions_file, "r", encoding="utf-8") as f:
