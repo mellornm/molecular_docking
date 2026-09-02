@@ -490,6 +490,9 @@ def screen(
     cz: float = typer.Option(..., "--cz", help="Coordenada Z do centro do sítio ativo"),
     size: float = typer.Option(22.0, "--size", help="Tamanho da caixa (A)"),
     exhaustiveness: int = typer.Option(16, "--ex", help="Exaustividade do Vina"),
+    target: str = typer.Option(
+        None, "--target", help="Identificador único do alvo (ex: 2AGV, 7CFN, 4HG7)"
+    ),
 ):
     """
     TRIAGEM VIRTUAL (VIRTUAL SCREENING):
@@ -504,10 +507,24 @@ def screen(
     receptor = Path(receptor)
     ligand = Path(ligand)
 
-    target_id = md_prep.sanitize_target_id(receptor.stem.replace("_receptor", "").replace("_prepared", ""))
-    if receptor.parent.name not in ("data", "screening", "processed", "results", "temp", "tmp"):
-        target_id = md_prep.sanitize_target_id(receptor.parent.name)
-    target_id = md_prep.sanitize_target_id(target_id)
+    if target:
+        target_id = md_prep.sanitize_target_id(target)
+    else:
+        if receptor.parent.name in ("processed", "raw", "results") and receptor.parent.parent.name not in ("data", "screening", ""):
+            target_id = receptor.parent.parent.name
+        elif receptor.parent.name not in ("data", "screening", "processed", "results", "temp", "tmp", ""):
+            target_id = receptor.parent.name
+        else:
+            stem_clean = receptor.stem
+            for sfx in ["_receptor", "_prepared", "_clean", "_docked", "_complex", "_target"]:
+                if stem_clean.lower().endswith(sfx):
+                    stem_clean = stem_clean[:-len(sfx)]
+            target_id = stem_clean
+
+        target_id = md_prep.sanitize_target_id(target_id)
+        if target_id in ("RECEPTOR", "PROTEIN", "TARGET", "COMPLEX") and receptor.parent.parent.name not in ("data", "screening", "", ".", "/"):
+            target_id = md_prep.sanitize_target_id(receptor.parent.parent.name)
+
     ligand_name = ligand.stem
 
     results_dir = DATA_DIR / "screening" / target_id / ligand_name
@@ -732,8 +749,62 @@ def interactive():
             )
 
         elif choice == "4. Triagem Virtual (Screening)":
-            receptor = questionary.path("Caminho para o receptor (.pdbqt):").ask()
-            ligand = questionary.path("Caminho para o ligante (.pdbqt):").ask()
+            rec_default = ""
+            for candidate in [
+                Path("data/7CFN/processed/receptor.pdbqt"),
+                Path("data/2AGV/processed/receptor.pdbqt"),
+                Path("data/1OSV/processed/receptor.pdbqt"),
+            ]:
+                if candidate.exists():
+                    rec_default = str(candidate)
+                    break
+            if not rec_default:
+                found_rec = list(Path("data").glob("*/processed/receptor.pdbqt"))
+                if found_rec:
+                    rec_default = str(found_rec[0])
+
+            receptor = questionary.path(
+                "Caminho para o receptor (.pdbqt):",
+                default=rec_default,
+            ).ask()
+            if not receptor:
+                console.print("[bold red]Operação cancelada: caminho do receptor não fornecido.[/bold red]")
+                continue
+
+            rec_p = Path(receptor)
+            target_default = "TARGET"
+            if rec_p.parent.name in ("processed", "raw", "results") and rec_p.parent.parent.name not in ("data", "screening", ""):
+                target_default = rec_p.parent.parent.name
+            elif rec_p.parent.name not in ("data", "screening", "processed", "results", "temp", "tmp", ""):
+                target_default = rec_p.parent.name
+            else:
+                stem_clean = rec_p.stem
+                for sfx in ["_receptor", "_prepared", "_clean", "_docked", "_complex", "_target"]:
+                    if stem_clean.lower().endswith(sfx):
+                        stem_clean = stem_clean[:-len(sfx)]
+                if stem_clean.lower() not in ("receptor", "protein", "target", "complex"):
+                    target_default = stem_clean
+            target_default = md_prep.sanitize_target_id(target_default)
+
+            target = questionary.text(
+                "Identificador único do Alvo (Target ID, ex: 2AGV, 7CFN):",
+                default=target_default,
+            ).ask()
+            target = md_prep.sanitize_target_id(target) if target else target_default
+
+            lig_default = ""
+            found_ligs = list(Path("data").glob("*.pdbqt"))
+            if found_ligs:
+                lig_default = str(found_ligs[0])
+
+            ligand = questionary.path(
+                "Caminho para o ligante (.pdbqt):",
+                default=lig_default,
+            ).ask()
+            if not ligand:
+                console.print("[bold red]Operação cancelada: caminho do ligante não fornecido.[/bold red]")
+                continue
+
             cx = questionary.text("Coordenada X:").ask()
             cy = questionary.text("Coordenada Y:").ask()
             cz = questionary.text("Coordenada Z:").ask()
@@ -748,6 +819,7 @@ def interactive():
                 cz=float(cz),
                 size=float(size),
                 exhaustiveness=int(ex),
+                target=target,
             )
 
         elif choice == "5. Preparar Dinâmica Molecular (GROMACS)":
