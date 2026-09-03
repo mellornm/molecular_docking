@@ -60,16 +60,21 @@ def find_executable(name: str) -> Optional[str]:
 def sanitize_target_id(name: str) -> str:
     """Normaliza o identificador do alvo para formato seguro de diretórios e arquivos (remove sufixos técnicos e caracteres inválidos)."""
     raw = str(name).strip()
-    for suffix in ["_receptor", "_prepared", "_clean", "_docked", "_complex", "_target"]:
+    for suffix in [
+        "_receptor",
+        "_prepared",
+        "_clean",
+        "_docked",
+        "_complex",
+        "_target",
+    ]:
         if raw.lower().endswith(suffix):
             raw = raw[: -len(suffix)]
     clean = re.sub(r"[^A-Za-z0-9_-]", "_", raw).strip("_")
     return clean.upper() or "TARGET"
 
 
-def check_and_purge_stale_files(
-    target_dir: Path, purge: bool = False
-) -> List[Path]:
+def check_and_purge_stale_files(target_dir: Path, purge: bool = False) -> List[Path]:
     """
     Inspeciona o diretório do alvo procurando por artefatos residuais de execuções anteriores:
     (#*#, *.cpt, *.gro, *.xtc, *.tpr, *.edr, *.trr, _GMXMMPBSA_*, *.top, *.ndx).
@@ -138,9 +143,34 @@ def validate_molecular_identity(
         )
 
     standard_aa = {
-        "ALA", "ARG", "ASN", "ASP", "CYS", "GLN", "GLU", "GLY", "HIS", "ILE",
-        "LEU", "LYS", "MET", "PHE", "PRO", "SER", "THR", "TRP", "TYR", "VAL",
-        "HID", "HIE", "HIP", "CYX", "ASH", "GLH", "LYN", "ARN",
+        "ALA",
+        "ARG",
+        "ASN",
+        "ASP",
+        "CYS",
+        "GLN",
+        "GLU",
+        "GLY",
+        "HIS",
+        "ILE",
+        "LEU",
+        "LYS",
+        "MET",
+        "PHE",
+        "PRO",
+        "SER",
+        "THR",
+        "TRP",
+        "TYR",
+        "VAL",
+        "HID",
+        "HIE",
+        "HIP",
+        "CYX",
+        "ASH",
+        "GLH",
+        "LYN",
+        "ARN",
     }
 
     protein_residues: List[Tuple[str, str, str]] = []  # (resname, resnum, chain)
@@ -228,9 +258,13 @@ def verify_tpr_consistency(tpr_path: Path) -> Dict[str, Any]:
     """
     tpr_path = Path(tpr_path)
     if not tpr_path.exists():
-        raise SimulationPrepError(f"Arquivo TPR não encontrado para verificação: {tpr_path}")
+        raise SimulationPrepError(
+            f"Arquivo TPR não encontrado para verificação: {tpr_path}"
+        )
     if tpr_path.stat().st_size == 0:
-        raise SimulationPrepError(f"Arquivo TPR gerado está vazio (0 bytes): {tpr_path}")
+        raise SimulationPrepError(
+            f"Arquivo TPR gerado está vazio (0 bytes): {tpr_path}"
+        )
 
     gmx_bin = find_executable("gmx")
     if not gmx_bin:
@@ -253,7 +287,11 @@ def verify_tpr_consistency(tpr_path: Path) -> Dict[str, Any]:
         )
         output = (res.stderr or "") + "\n" + (res.stdout or "")
 
-        atom_match = re.search(r"natoms\s*=\s*(\d+)", output, re.IGNORECASE) or re.search(r"#atoms\s*=\s*(\d+)", output, re.IGNORECASE) or re.search(r"(?:Coords|Step)\s+(\d+)", output)
+        atom_match = (
+            re.search(r"natoms\s*=\s*(\d+)", output, re.IGNORECASE)
+            or re.search(r"#atoms\s*=\s*(\d+)", output, re.IGNORECASE)
+            or re.search(r"(?:Coords|Step)\s+(\d+)", output)
+        )
         atom_count = int(atom_match.group(1)) if atom_match else None
 
         if res.returncode != 0 and "error" in output.lower():
@@ -370,9 +408,7 @@ def run_acpype(ligand_pdb: Path, output_dir: Path):
         raise SimulationPrepError(f"Erro ao iniciar processo do ACPYPE: {e}")
 
 
-def run_pdb2gmx(
-    receptor_pdb: Path, output_dir: Path, target_id: Optional[str] = None
-):
+def run_pdb2gmx(receptor_pdb: Path, output_dir: Path, target_id: Optional[str] = None):
     """
     Etapa D: Executa o GROMACS pdb2gmx para preparar a proteína e gerar topologia.
     """
@@ -398,7 +434,9 @@ def run_pdb2gmx(
 
     gmx_bin = find_executable("gmx")
     if not gmx_bin:
-        raise DependencyError("O executável 'gmx' (GROMACS) não foi encontrado no PATH.")
+        raise DependencyError(
+            "O executável 'gmx' (GROMACS) não foi encontrado no PATH."
+        )
 
     abs_receptor_pdb = receptor_pdb.resolve()
     if not abs_receptor_pdb.exists():
@@ -412,7 +450,9 @@ def run_pdb2gmx(
     gmx_dir = str(Path(gmx_bin).parent)
     env["PATH"] = f"{gmx_dir}{os.pathsep}{env.get('PATH', '')}"
 
-    out_gro_name = f"{prefix}protein_processed.gro" if target_id else "protein_processed.gro"
+    out_gro_name = (
+        f"{prefix}protein_processed.gro" if target_id else "protein_processed.gro"
+    )
     out_top_name = f"{prefix}topol.top" if target_id else "topol.top"
 
     cmd_gmx = [
@@ -473,7 +513,9 @@ def run_pdb2gmx(
     # Cria espelhos sem prefixo para manter compatibilidade com submódulos legados
     if target_id:
         if (output_dir / out_gro_name).exists():
-            shutil.copy2(output_dir / out_gro_name, output_dir / "protein_processed.gro")
+            shutil.copy2(
+                output_dir / out_gro_name, output_dir / "protein_processed.gro"
+            )
         if (output_dir / out_top_name).exists():
             shutil.copy2(output_dir / out_top_name, output_dir / "topol.top")
 
@@ -483,7 +525,9 @@ def stitch_topology(output_dir: Path, target_id: Optional[str] = None):
     Etapa F: Injeta o include do ligante e sua definição em [ molecules ] no topol.top.
     """
     prefix = f"{sanitize_target_id(target_id)}_" if target_id else ""
-    target_top = output_dir / f"{prefix}topol.top" if target_id else output_dir / "topol.top"
+    target_top = (
+        output_dir / f"{prefix}topol.top" if target_id else output_dir / "topol.top"
+    )
     if not target_top.exists():
         target_top = output_dir / "topol.top"
 
@@ -557,9 +601,7 @@ def stitch_topology(output_dir: Path, target_id: Optional[str] = None):
         if target_top != mirror_top:
             shutil.copy2(target_top, mirror_top)
     except Exception as e:
-        raise SimulationPrepError(
-            f"Falha ao salvar modificações na topologia: {e}"
-        )
+        raise SimulationPrepError(f"Falha ao salvar modificações na topologia: {e}")
 
 
 def prepare_md_system(
@@ -582,7 +624,9 @@ def prepare_md_system(
     if not target_id:
         target_id = sanitize_target_id(output_dir.name)
         if target_id.lower() in ("md_files", "screening", "data"):
-            target_id = sanitize_target_id(receptor_pdb.stem.replace("_processed", "").replace("receptor", ""))
+            target_id = sanitize_target_id(
+                receptor_pdb.stem.replace("_processed", "").replace("receptor", "")
+            )
     target_id = sanitize_target_id(target_id)
     prefix = f"{target_id}_"
 
@@ -642,9 +686,34 @@ def prepare_md_system(
         fixer.removeHeterogens(keepWater=False)
 
         standard_amino_acids = {
-            "ALA", "ARG", "ASN", "ASP", "CYS", "GLN", "GLU", "GLY", "HIS", "ILE",
-            "LEU", "LYS", "MET", "PHE", "PRO", "SER", "THR", "TRP", "TYR", "VAL",
-            "HID", "HIE", "HIP", "CYX", "ASH", "GLH", "LYN", "ARN",
+            "ALA",
+            "ARG",
+            "ASN",
+            "ASP",
+            "CYS",
+            "GLN",
+            "GLU",
+            "GLY",
+            "HIS",
+            "ILE",
+            "LEU",
+            "LYS",
+            "MET",
+            "PHE",
+            "PRO",
+            "SER",
+            "THR",
+            "TRP",
+            "TYR",
+            "VAL",
+            "HID",
+            "HIE",
+            "HIP",
+            "CYX",
+            "ASH",
+            "GLH",
+            "LYN",
+            "ARN",
         }
         protein_res = [
             r
@@ -689,7 +758,9 @@ def prepare_md_system(
     # Etapa D: Topologia da Proteína (pdb2gmx)
     yield "D", "start"
     if not gmx_bin:
-        raise DependencyError("O executável 'gmx' (GROMACS) não foi encontrado no PATH.")
+        raise DependencyError(
+            "O executável 'gmx' (GROMACS) não foi encontrado no PATH."
+        )
 
     cmd_pdb2gmx = [
         gmx_bin,
@@ -706,7 +777,9 @@ def prepare_md_system(
         "tip3p",
     ]
     try:
-        run_command(cmd_pdb2gmx, output_dir, step_name="Etapa D (Topologia da Proteína)")
+        run_command(
+            cmd_pdb2gmx, output_dir, step_name="Etapa D (Topologia da Proteína)"
+        )
     except SimulationPrepError as e:
         if "not found in the input file" in str(e) or "missing" in str(e).lower():
             cmd_pdb2gmx_missing = cmd_pdb2gmx + ["-missing"]
@@ -719,7 +792,10 @@ def prepare_md_system(
             raise e
 
     # Espelhos de compatibilidade
-    shutil.copy2(output_dir / f"{prefix}protein_processed.gro", output_dir / "protein_processed.gro")
+    shutil.copy2(
+        output_dir / f"{prefix}protein_processed.gro",
+        output_dir / "protein_processed.gro",
+    )
     shutil.copy2(output_dir / f"{prefix}topol.top", output_dir / "topol.top")
     yield "D", "success"
 
@@ -763,9 +839,11 @@ def prepare_md_system(
         lig_fixed_pdb = output_dir / f"{prefix}ligand_md.pdb"
 
         with open(rec_fixed_pdb, "r", encoding="utf-8", errors="ignore") as f_rec:
-            r_lines = [l for l in f_rec if not l.strip() in ("END", "ENDMDL")]
+            r_lines = [l for l in f_rec if l.strip() not in ("END", "ENDMDL")]
         with open(lig_fixed_pdb, "r", encoding="utf-8", errors="ignore") as f_lig:
-            l_lines = [l for l in f_lig if l.startswith("ATOM") or l.startswith("HETATM")]
+            l_lines = [
+                l for l in f_lig if l.startswith("ATOM") or l.startswith("HETATM")
+            ]
 
         with open(complex_pdb_path, "w", encoding="utf-8") as f_comp:
             for l in r_lines:
@@ -805,7 +883,9 @@ def prepare_md_system(
         "dodecahedron",
     ]
     run_command(cmd_editconf, output_dir, step_name="Etapa G (Definição da Caixa)")
-    shutil.copy2(output_dir / f"{prefix}complex_box.gro", output_dir / "complex_box.gro")
+    shutil.copy2(
+        output_dir / f"{prefix}complex_box.gro", output_dir / "complex_box.gro"
+    )
     yield "G", "success"
 
     # Etapa H: Solvatação (solvate)
@@ -823,7 +903,9 @@ def prepare_md_system(
         f"{prefix}topol.top",
     ]
     run_command(cmd_solvate, output_dir, step_name="Etapa H (Solvatação)")
-    shutil.copy2(output_dir / f"{prefix}complex_solv.gro", output_dir / "complex_solv.gro")
+    shutil.copy2(
+        output_dir / f"{prefix}complex_solv.gro", output_dir / "complex_solv.gro"
+    )
     shutil.copy2(output_dir / f"{prefix}topol.top", output_dir / "topol.top")
     yield "H", "success"
 
@@ -855,7 +937,9 @@ def prepare_md_system(
             "-maxwarn",
             "3",
         ]
-        run_command(cmd_grompp_ions, output_dir, step_name="Etapa I (Compilação de Íons)")
+        run_command(
+            cmd_grompp_ions, output_dir, step_name="Etapa I (Compilação de Íons)"
+        )
         shutil.copy2(ions_tpr, output_dir / "ions.tpr")
         verify_tpr_consistency(ions_tpr)
     except Exception as e:
@@ -889,7 +973,9 @@ def prepare_md_system(
         input_val=b"15\n",
         step_name="Etapa J (Neutralização Automatizada)",
     )
-    shutil.copy2(output_dir / f"{prefix}complex_ions.gro", output_dir / "complex_ions.gro")
+    shutil.copy2(
+        output_dir / f"{prefix}complex_ions.gro", output_dir / "complex_ions.gro"
+    )
     shutil.copy2(output_dir / f"{prefix}topol.top", output_dir / "topol.top")
     yield "J", "success"
 
@@ -914,7 +1000,9 @@ def prepare_md_system(
             "-maxwarn",
             "2",
         ]
-        run_command(cmd_grompp_em, output_dir, step_name="Etapa K (Grompp Definitivo EM)")
+        run_command(
+            cmd_grompp_em, output_dir, step_name="Etapa K (Grompp Definitivo EM)"
+        )
         shutil.copy2(em_tpr, output_dir / "em.tpr")
         verify_tpr_consistency(em_tpr)
     except Exception as e:
@@ -932,4 +1020,3 @@ def prepare_md_system(
     if (output_dir / f"{prefix}em.gro").exists():
         shutil.copy2(output_dir / f"{prefix}em.gro", output_dir / "em.gro")
     yield "L", "success"
-

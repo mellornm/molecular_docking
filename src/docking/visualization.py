@@ -66,6 +66,7 @@ def generate_pymol_script(work_dir: Path) -> Path:
     gmx_bin = shutil.which("gmx")
     if not gmx_bin:
         from docking.md_prep import find_executable
+
         gmx_bin = find_executable("gmx")
 
     tpr_file = work_dir / "md.tpr"
@@ -81,11 +82,29 @@ def generate_pymol_script(work_dir: Path) -> Path:
             index_file = matches_ndx[0]
 
     nowat_pdb = work_dir / "md_clean_nowat.pdb"
-    if not nowat_pdb.exists() and gmx_bin and struct_file and struct_file.exists() and tpr_file.exists() and index_file.exists():
+    if (
+        not nowat_pdb.exists()
+        and gmx_bin
+        and struct_file
+        and struct_file.exists()
+        and tpr_file.exists()
+        and index_file.exists()
+    ):
         try:
             env = os.environ.copy()
             subprocess.run(
-                [gmx_bin, "trjconv", "-s", str(tpr_file.name), "-f", str(struct_file.name), "-n", str(index_file.name), "-o", "md_clean_nowat.pdb"],
+                [
+                    gmx_bin,
+                    "trjconv",
+                    "-s",
+                    str(tpr_file.name),
+                    "-f",
+                    str(struct_file.name),
+                    "-n",
+                    str(index_file.name),
+                    "-o",
+                    "md_clean_nowat.pdb",
+                ],
                 cwd=str(work_dir),
                 input=b"Protein_LIG\n",
                 capture_output=True,
@@ -96,11 +115,24 @@ def generate_pymol_script(work_dir: Path) -> Path:
             pass
 
     clean_pdb = work_dir / "md_clean.pdb"
-    if not clean_pdb.exists() and not nowat_pdb.exists() and gmx_bin and struct_file and struct_file.exists():
+    if (
+        not clean_pdb.exists()
+        and not nowat_pdb.exists()
+        and gmx_bin
+        and struct_file
+        and struct_file.exists()
+    ):
         try:
             env = os.environ.copy()
             subprocess.run(
-                [gmx_bin, "editconf", "-f", str(struct_file.name), "-o", "md_clean.pdb"],
+                [
+                    gmx_bin,
+                    "editconf",
+                    "-f",
+                    str(struct_file.name),
+                    "-o",
+                    "md_clean.pdb",
+                ],
                 cwd=str(work_dir),
                 capture_output=True,
                 env=env,
@@ -112,7 +144,9 @@ def generate_pymol_script(work_dir: Path) -> Path:
     # Verifica se a estrutura medóide mais representativa do cluster está presente
     medoid_file = work_dir / "cluster_medoid.gro"
     if not medoid_file.exists():
-        matches_medoid = list(work_dir.glob("*cluster_medoid.gro")) or list(work_dir.glob("*/cluster_medoid.gro"))
+        matches_medoid = list(work_dir.glob("*cluster_medoid.gro")) or list(
+            work_dir.glob("*/cluster_medoid.gro")
+        )
         if matches_medoid:
             medoid_file = matches_medoid[0]
 
@@ -121,7 +155,14 @@ def generate_pymol_script(work_dir: Path) -> Path:
         try:
             env = os.environ.copy()
             subprocess.run(
-                [gmx_bin, "editconf", "-f", str(medoid_file.name), "-o", "cluster_medoid.pdb"],
+                [
+                    gmx_bin,
+                    "editconf",
+                    "-f",
+                    str(medoid_file.name),
+                    "-o",
+                    "cluster_medoid.pdb",
+                ],
                 cwd=str(work_dir),
                 capture_output=True,
                 env=env,
@@ -133,16 +174,38 @@ def generate_pymol_script(work_dir: Path) -> Path:
     # Trajetória ajustada (PBC Corrigido & Fit rot+trans)
     fit_xtc_file = work_dir / "md_fit.xtc"
     if not fit_xtc_file.exists():
-        matches_xtc = list(work_dir.glob("*md_fit.xtc")) or list(work_dir.glob("*/md_fit.xtc"))
+        matches_xtc = list(work_dir.glob("*md_fit.xtc")) or list(
+            work_dir.glob("*/md_fit.xtc")
+        )
         if matches_xtc:
             fit_xtc_file = matches_xtc[0]
 
     nowat_xtc = work_dir / "md_fit_nowat.xtc"
-    if not nowat_xtc.exists() and gmx_bin and fit_xtc_file and fit_xtc_file.exists() and tpr_file.exists() and index_file.exists():
+    if (
+        not nowat_xtc.exists()
+        and gmx_bin
+        and fit_xtc_file
+        and fit_xtc_file.exists()
+        and tpr_file.exists()
+        and index_file.exists()
+    ):
         try:
             env = os.environ.copy()
             subprocess.run(
-                [gmx_bin, "trjconv", "-s", str(tpr_file.name), "-f", str(fit_xtc_file.name), "-n", str(index_file.name), "-o", "md_fit_nowat.xtc", "-dt", "100"],
+                [
+                    gmx_bin,
+                    "trjconv",
+                    "-s",
+                    str(tpr_file.name),
+                    "-f",
+                    str(fit_xtc_file.name),
+                    "-n",
+                    str(index_file.name),
+                    "-o",
+                    "md_fit_nowat.xtc",
+                    "-dt",
+                    "100",
+                ],
                 cwd=str(work_dir),
                 input=b"Protein_LIG\n",
                 capture_output=True,
@@ -153,14 +216,34 @@ def generate_pymol_script(work_dir: Path) -> Path:
             pass
 
     # Escolhe o melhor arquivo de estrutura primária e trajetória compatível
-    primary_struct = "md_clean_nowat.pdb" if nowat_pdb.exists() else ("md_clean.pdb" if clean_pdb.exists() else struct_file.name)
-    primary_xtc = "md_fit_nowat.xtc" if (nowat_pdb.exists() and nowat_xtc.exists()) else (fit_xtc_file.name if fit_xtc_file and fit_xtc_file.exists() and not nowat_pdb.exists() else None)
-    primary_medoid = "cluster_medoid.pdb" if medoid_pdb.exists() else (medoid_file.name if medoid_file and medoid_file.exists() else None)
+    primary_struct = (
+        "md_clean_nowat.pdb"
+        if nowat_pdb.exists()
+        else ("md_clean.pdb" if clean_pdb.exists() else struct_file.name)
+    )
+    primary_xtc = (
+        "md_fit_nowat.xtc"
+        if (nowat_pdb.exists() and nowat_xtc.exists())
+        else (
+            fit_xtc_file.name
+            if fit_xtc_file and fit_xtc_file.exists() and not nowat_pdb.exists()
+            else None
+        )
+    )
+    primary_medoid = (
+        "cluster_medoid.pdb"
+        if medoid_pdb.exists()
+        else (medoid_file.name if medoid_file and medoid_file.exists() else None)
+    )
 
     # Leitura do interactions.json (se existir)
     interactions_file = work_dir / "interactions.json"
     if not interactions_file.exists():
-        matches = list(work_dir.glob("*_interactions.json")) or list(work_dir.glob("*/interactions.json")) or list(work_dir.glob("*/*_interactions.json"))
+        matches = (
+            list(work_dir.glob("*_interactions.json"))
+            or list(work_dir.glob("*/interactions.json"))
+            or list(work_dir.glob("*/*_interactions.json"))
+        )
         if matches:
             interactions_file = matches[0]
 

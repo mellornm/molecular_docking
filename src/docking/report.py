@@ -380,7 +380,9 @@ def generate_html_report(
                 or "Molécula com 100% de conformidade físico-química (Lipinski & Veber), alta absorção intestinal estimada e ausência de toxicidade estrutural."
             )
         elif verdict_cat == "MODERATE":
-            admet_badge = '<span class="badge badge-warning">APROVADO COM RESSALVAS</span>'
+            admet_badge = (
+                '<span class="badge badge-warning">APROVADO COM RESSALVAS</span>'
+            )
             admet_banner_class = "veredito-warning"
             admet_banner_icon = "⚠️"
             admet_banner_title = "Aprovado com Ressalvas (Alerta Moderado)"
@@ -389,7 +391,9 @@ def generate_html_report(
                 or "Molécula com alta absorção intestinal e ausência de toxicidade, apresentando desvio pontual em parâmetro físico-químico aceito pela literatura."
             )
         else:
-            admet_badge = '<span class="badge badge-danger">REPROVADO / ALTO RISCO</span>'
+            admet_badge = (
+                '<span class="badge badge-danger">REPROVADO / ALTO RISCO</span>'
+            )
             admet_banner_class = "veredito-danger"
             admet_banner_icon = "🚫"
             admet_banner_title = "Alertas Críticos ou Violações ADMET Identificadas"
@@ -459,7 +463,10 @@ def generate_html_report(
         is_pgp_substrate = (
             admet.get("pgp_substrate")
             if "pgp_substrate" in admet
-            else (pgp_status.startswith("Substrato") or ("Substrato" in pgp_status and "Não" not in pgp_status))
+            else (
+                pgp_status.startswith("Substrato")
+                or ("Substrato" in pgp_status and "Não" not in pgp_status)
+            )
         )
         pgp_badge = (
             '<span class="badge badge-warning">Efluxo Ativo</span>'
@@ -468,10 +475,22 @@ def generate_html_report(
         )
 
         fsp3 = admet.get("fsp3", 0.0)
-        fsp3_badge = '<span class="badge badge-success">Alto (3D Complexo)</span>' if fsp3 >= 0.42 else '<span class="badge badge-secondary">Moderado / Plano</span>'
+        fsp3_badge = (
+            '<span class="badge badge-success">Alto (3D Complexo)</span>'
+            if fsp3 >= 0.42
+            else '<span class="badge badge-secondary">Moderado / Plano</span>'
+        )
         qed = admet.get("qed_score", 0.0)
         qed_cls = admet.get("qed_classification", "N/A")
-        qed_badge = '<span class="badge badge-success">Alto (Drug-like)</span>' if qed >= 0.67 else ('<span class="badge badge-primary">Moderado</span>' if qed >= 0.49 else '<span class="badge badge-warning">Baixo</span>')
+        qed_badge = (
+            '<span class="badge badge-success">Alto (Drug-like)</span>'
+            if qed >= 0.67
+            else (
+                '<span class="badge badge-primary">Moderado</span>'
+                if qed >= 0.49
+                else '<span class="badge badge-warning">Baixo</span>'
+            )
+        )
         sa = admet.get("synthetic_accessibility", 0.0)
         sa_cls = admet.get("synthetic_accessibility_classification", "N/A")
         n_chiral = admet.get("chiral_centers", 0)
@@ -485,9 +504,17 @@ def generate_html_report(
             sa_badge = '<span class="badge badge-warning">Alta Complexidade</span>'
 
         lead_like = admet.get("lead_likeness_pass", False)
-        lead_badge = '<span class="badge badge-success">Conforme</span>' if lead_like else '<span class="badge badge-secondary">Não Enquadrado</span>'
+        lead_badge = (
+            '<span class="badge badge-success">Conforme</span>'
+            if lead_like
+            else '<span class="badge badge-secondary">Não Enquadrado</span>'
+        )
         golden = admet.get("golden_triangle_pass", False)
-        golden_badge = '<span class="badge badge-success">Conforme</span>' if golden else '<span class="badge badge-secondary">Fora do Triângulo</span>'
+        golden_badge = (
+            '<span class="badge badge-success">Conforme</span>'
+            if golden
+            else '<span class="badge badge-secondary">Fora do Triângulo</span>'
+        )
 
         all_alerts = admet.get("all_structural_alerts", toxic_alerts)
         if all_alerts:
@@ -495,7 +522,9 @@ def generate_html_report(
             tox_val = ", ".join(all_alerts)
         else:
             tox_badge = '<span class="badge badge-success">Seguro (0 Alertas)</span>'
-            tox_val = "Nenhum alerta de PAINS, Brenk ou subestruturas reativas identificado"
+            tox_val = (
+                "Nenhum alerta de PAINS, Brenk ou subestruturas reativas identificado"
+            )
 
         admet_rows_html = f"""
         <tr class="section-header"><td colspan="4">1. Propriedades Físico-Químicas & Regras de Filtro (Lipinski & Veber)</td></tr>
@@ -634,7 +663,11 @@ def generate_html_report(
             a_pair = occ.get("acceptor", "LIG")
             pct = occ.get("occupancy_percent", 0.0)
             cls_txt = occ.get("classification", "")
-            badge_cls = "badge-success" if pct >= 75.0 else ("badge-primary" if pct >= 35.0 else "badge-secondary")
+            badge_cls = (
+                "badge-success"
+                if pct >= 75.0
+                else ("badge-primary" if pct >= 35.0 else "badge-secondary")
+            )
             hbond_occ_rows += f"""
             <tr>
                 <td><strong>{d_pair}</strong> &rarr; {a_pair}</td>
@@ -694,12 +727,16 @@ def generate_html_report(
             </tr>
             """
 
-        decomp_plot_html = f"""
+        decomp_plot_html = (
+            f"""
         <div style="margin-top: 1.5rem; text-align: center;">
             <h4 style="margin-bottom: 0.5rem; font-size: 1.05rem;">Perfil de Contribuição por Resíduo (&Delta;G<sub>bind</sub>)</h4>
             <img src="{decomp_img}" alt="MM-PBSA Per-Residue Decomposition" class="img-responsive" style="max-height: 480px; margin: 0 auto; border-radius: var(--radius-md); box-shadow: var(--shadow-sm);" />
         </div>
-        """ if decomp_img else ""
+        """
+            if decomp_img
+            else ""
+        )
 
         decomp_section_html = f"""
         <div class="card-body" style="border-top: 1px solid var(--border-color); background: #fafafa;">

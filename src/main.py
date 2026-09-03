@@ -250,7 +250,9 @@ def render_admet_table(admet: dict):
 
     # Fallback caso os campos estendidos não estejam presentes
     if not verdict_cat:
-        has_severe_risk = (hia_status_val == "Baixa Absorção") or (len(toxic_alerts) > 0)
+        has_severe_risk = (hia_status_val == "Baixa Absorção") or (
+            len(toxic_alerts) > 0
+        )
         if total_viol == 0 and not has_severe_risk:
             verdict_cat = "APPROVED"
         elif total_viol == 1 and not has_severe_risk:
@@ -260,10 +262,14 @@ def render_admet_table(admet: dict):
 
     if verdict_cat == "APPROVED":
         veredito = "[bold white on green]  APROVADO (BIODISPONÍVEL & SEGURO)  [/bold white on green]"
-        points_str = "\n".join(dynamic_points) if dynamic_points else (
-            "• Físico-Química: 100% de conformidade com as regras clássicas de Lipinski e Veber (0 violações).\n"
-            "• Farmacocinética: Alta Absorção Intestinal (HIA) estimada (Egan Egg).\n"
-            "• Toxicidade: Nenhum alerta estrutural reativo ou PAINS identificado."
+        points_str = (
+            "\n".join(dynamic_points)
+            if dynamic_points
+            else (
+                "• Físico-Química: 100% de conformidade com as regras clássicas de Lipinski e Veber (0 violações).\n"
+                "• Farmacocinética: Alta Absorção Intestinal (HIA) estimada (Egan Egg).\n"
+                "• Toxicidade: Nenhum alerta estrutural reativo ou PAINS identificado."
+            )
         )
         message = (
             f"Veredito de Triagem ADMET: {veredito}\n"
@@ -274,10 +280,14 @@ def render_admet_table(admet: dict):
 
     elif verdict_cat == "MODERATE":
         veredito = "[bold black on yellow]  APROVADO COM RESSALVAS (ALERTA MODERADO)  [/bold black on yellow]"
-        points_str = "\n".join(dynamic_points) if dynamic_points else (
-            f"• Desvio Pontual Tolerado: {all_viol[0] if all_viol else '1 desvio físico-químico'} (desvio único aceito em fármacos comerciais).\n"
-            "• Farmacocinética: Mantém Alta Absorção Intestinal (HIA) estimada (Egan Egg).\n"
-            "• Toxicidade: Nenhum alerta estrutural reativo ou PAINS identificado."
+        points_str = (
+            "\n".join(dynamic_points)
+            if dynamic_points
+            else (
+                f"• Desvio Pontual Tolerado: {all_viol[0] if all_viol else '1 desvio físico-químico'} (desvio único aceito em fármacos comerciais).\n"
+                "• Farmacocinética: Mantém Alta Absorção Intestinal (HIA) estimada (Egan Egg).\n"
+                "• Toxicidade: Nenhum alerta estrutural reativo ou PAINS identificado."
+            )
         )
         message = (
             f"Veredito de Triagem ADMET: {veredito}\n"
@@ -288,8 +298,12 @@ def render_admet_table(admet: dict):
 
     else:
         veredito = "[bold white on red]  REPROVADO / RISCO ADMET  [/bold white on red]"
-        points_str = "\n".join(dynamic_points) if dynamic_points else (
-            f"• Problemas Identificados: {', '.join(all_viol) if all_viol else 'Critérios ADMET não atendidos.'}"
+        points_str = (
+            "\n".join(dynamic_points)
+            if dynamic_points
+            else (
+                f"• Problemas Identificados: {', '.join(all_viol) if all_viol else 'Critérios ADMET não atendidos.'}"
+            )
         )
         message = (
             f"Veredito de Triagem ADMET: {veredito}\n"
@@ -452,7 +466,11 @@ def validate(
             elif v_cat == "RISK":
                 v_label = "Reprovado / Risco ADMET"
             else:
-                v_label = "Aprovado" if admet_info.get("pass_filters") else "Reprovado / Risco"
+                v_label = (
+                    "Aprovado"
+                    if admet_info.get("pass_filters")
+                    else "Reprovado / Risco"
+                )
             details["Triagem ADMET"] = v_label
         notifier.send_email_alert(
             step_name=f"Validação / Redocking ({pdb_id})",
@@ -510,19 +528,43 @@ def screen(
     if target:
         target_id = md_prep.sanitize_target_id(target)
     else:
-        if receptor.parent.name in ("processed", "raw", "results") and receptor.parent.parent.name not in ("data", "screening", ""):
+        if receptor.parent.name in (
+            "processed",
+            "raw",
+            "results",
+        ) and receptor.parent.parent.name not in ("data", "screening", ""):
             target_id = receptor.parent.parent.name
-        elif receptor.parent.name not in ("data", "screening", "processed", "results", "temp", "tmp", ""):
+        elif receptor.parent.name not in (
+            "data",
+            "screening",
+            "processed",
+            "results",
+            "temp",
+            "tmp",
+            "",
+        ):
             target_id = receptor.parent.name
         else:
             stem_clean = receptor.stem
-            for sfx in ["_receptor", "_prepared", "_clean", "_docked", "_complex", "_target"]:
+            for sfx in [
+                "_receptor",
+                "_prepared",
+                "_clean",
+                "_docked",
+                "_complex",
+                "_target",
+            ]:
                 if stem_clean.lower().endswith(sfx):
-                    stem_clean = stem_clean[:-len(sfx)]
+                    stem_clean = stem_clean[: -len(sfx)]
             target_id = stem_clean
 
         target_id = md_prep.sanitize_target_id(target_id)
-        if target_id in ("RECEPTOR", "PROTEIN", "TARGET", "COMPLEX") and receptor.parent.parent.name not in ("data", "screening", "", ".", "/"):
+        if target_id in (
+            "RECEPTOR",
+            "PROTEIN",
+            "TARGET",
+            "COMPLEX",
+        ) and receptor.parent.parent.name not in ("data", "screening", "", ".", "/"):
             target_id = md_prep.sanitize_target_id(receptor.parent.parent.name)
 
     ligand_name = ligand.stem
@@ -575,6 +617,7 @@ def screen(
             )
             # Cria espelhos
             import shutil
+
             shutil.copy2(docked_out, results_dir / "docked.pdbqt")
             shutil.copy2(vina_log, results_dir / "vina.log")
             progress.update(task1, completed=1)
@@ -625,7 +668,9 @@ def screen(
             interactions["pharmacokinetics"] = admet  # type: ignore
 
             # Salva o arquivo JSON consolidado com prefixo e espelho
-            interactions_file = results_dir / f"{target_id}_{ligand_name}_interactions.json"
+            interactions_file = (
+                results_dir / f"{target_id}_{ligand_name}_interactions.json"
+            )
             with open(interactions_file, "w", encoding="utf-8") as f:
                 json.dump(interactions, f, indent=4, ensure_ascii=False)
             shutil.copy2(interactions_file, results_dir / "interactions.json")
@@ -664,7 +709,11 @@ def screen(
             elif v_cat == "RISK":
                 v_label = "Reprovado / Risco ADMET"
             else:
-                v_label = "Aprovado" if admet_info.get("pass_filters") else "Reprovado / Risco"
+                v_label = (
+                    "Aprovado"
+                    if admet_info.get("pass_filters")
+                    else "Reprovado / Risco"
+                )
             details["Veredito ADMET"] = v_label
 
         notifier.send_email_alert(
@@ -751,9 +800,7 @@ def interactive():
         elif choice == "4. Triagem Virtual (Screening)":
             rec_default = ""
             for candidate in [
-                Path("data/7CFN/processed/receptor.pdbqt"),
-                Path("data/2AGV/processed/receptor.pdbqt"),
-                Path("data/1OSV/processed/receptor.pdbqt"),
+                Path("data/EXPERIMENT_NAME/processed/receptor.pdbqt"),
             ]:
                 if candidate.exists():
                     rec_default = str(candidate)
@@ -768,21 +815,47 @@ def interactive():
                 default=rec_default,
             ).ask()
             if not receptor:
-                console.print("[bold red]Operação cancelada: caminho do receptor não fornecido.[/bold red]")
+                console.print(
+                    "[bold red]Operação cancelada: caminho do receptor não fornecido.[/bold red]"
+                )
                 continue
 
             rec_p = Path(receptor)
             target_default = "TARGET"
-            if rec_p.parent.name in ("processed", "raw", "results") and rec_p.parent.parent.name not in ("data", "screening", ""):
+            if rec_p.parent.name in (
+                "processed",
+                "raw",
+                "results",
+            ) and rec_p.parent.parent.name not in ("data", "screening", ""):
                 target_default = rec_p.parent.parent.name
-            elif rec_p.parent.name not in ("data", "screening", "processed", "results", "temp", "tmp", ""):
+            elif rec_p.parent.name not in (
+                "data",
+                "screening",
+                "processed",
+                "results",
+                "temp",
+                "tmp",
+                "",
+            ):
                 target_default = rec_p.parent.name
             else:
                 stem_clean = rec_p.stem
-                for sfx in ["_receptor", "_prepared", "_clean", "_docked", "_complex", "_target"]:
+                for sfx in [
+                    "_receptor",
+                    "_prepared",
+                    "_clean",
+                    "_docked",
+                    "_complex",
+                    "_target",
+                ]:
                     if stem_clean.lower().endswith(sfx):
-                        stem_clean = stem_clean[:-len(sfx)]
-                if stem_clean.lower() not in ("receptor", "protein", "target", "complex"):
+                        stem_clean = stem_clean[: -len(sfx)]
+                if stem_clean.lower() not in (
+                    "receptor",
+                    "protein",
+                    "target",
+                    "complex",
+                ):
                     target_default = stem_clean
             target_default = md_prep.sanitize_target_id(target_default)
 
@@ -802,7 +875,9 @@ def interactive():
                 default=lig_default,
             ).ask()
             if not ligand:
-                console.print("[bold red]Operação cancelada: caminho do ligante não fornecido.[/bold red]")
+                console.print(
+                    "[bold red]Operação cancelada: caminho do ligante não fornecido.[/bold red]"
+                )
                 continue
 
             cx = questionary.text("Coordenada X:").ask()
@@ -825,8 +900,7 @@ def interactive():
         elif choice == "5. Preparar Dinâmica Molecular (GROMACS)":
             rec_default = ""
             for candidate in [
-                Path("data/7CFN/processed/receptor.pdb"),
-                Path("data/1OSV/processed/receptor.pdb"),
+                Path("data/EXPERIMENT_NAME/processed/receptor.pdb"),
             ]:
                 if candidate.exists():
                     rec_default = str(candidate)
@@ -838,9 +912,11 @@ def interactive():
 
             sdf_default = ""
             for candidate_sdf in [
-                Path("data/screening/7CFN/desoxicolato/7CFN_desoxicolato_docked_poses.sdf"),
-                Path("data/7CFN/results/docked_poses.sdf"),
-                Path("data/screening/desoxicolato/docked_poses.sdf"),
+                Path(
+                    "data/screening/EXPERIMENT_NAME/ligand/EXPERIMENT_NAME_ligand_docked_poses.sdf"
+                ),
+                Path("data/EXPERIMENT_NAME/results/docked_poses.sdf"),
+                Path("data/screening/ligand/docked_poses.sdf"),
             ]:
                 if candidate_sdf.exists():
                     sdf_default = str(candidate_sdf)
@@ -861,13 +937,18 @@ def interactive():
             ).ask()
 
             # Inferência inteligente de Target ID
-            target_default = "7CFN"
+            target_default = "EXPERIMENT_NAME"
             if receptor_path:
                 rec_p = Path(receptor_path)
-                if rec_p.parent.name == "processed" and rec_p.parent.parent.name not in ("data", ""):
+                if (
+                    rec_p.parent.name == "processed"
+                    and rec_p.parent.parent.name not in ("data", "")
+                ):
                     target_default = rec_p.parent.parent.name
                 else:
-                    target_default = rec_p.stem.replace("_receptor", "").replace("_clean", "")
+                    target_default = rec_p.stem.replace("_receptor", "").replace(
+                        "_clean", ""
+                    )
             target_default = md_prep.sanitize_target_id(target_default)
 
             target_id = questionary.text(
@@ -902,7 +983,9 @@ def interactive():
                     ).ask()
                     if purge_confirm:
                         md_prep.check_and_purge_stale_files(out_path, purge=True)
-                        console.print("[bold green]✓ Limpeza de resíduos concluída com sucesso.[/bold green]")
+                        console.print(
+                            "[bold green]✓ Limpeza de resíduos concluída com sucesso.[/bold green]"
+                        )
 
             start_time = time.time()
             try:
@@ -986,7 +1069,11 @@ def interactive():
                     }
 
                     for step, status in md_prep.prepare_md_system(
-                        Path(receptor_path), Path(sdf_path), out_path, target_id=target_id, purge=False
+                        Path(receptor_path),
+                        Path(sdf_path),
+                        out_path,
+                        target_id=target_id,
+                        purge=False,
                     ):
                         task_id = tasks[step]
                         if status == "start":
@@ -1083,8 +1170,12 @@ def interactive():
                 )
 
         elif choice == "6. Rodar Equilíbrio da Dinâmica (NVT/NPT)":
-            candidate_dirs = [str(d) for d in (DATA_DIR / "md_files").glob("*") if d.is_dir()]
-            md_dir_default = candidate_dirs[0] if candidate_dirs else "data/md_files/7CFN"
+            candidate_dirs = [
+                str(d) for d in (DATA_DIR / "md_files").glob("*") if d.is_dir()
+            ]
+            md_dir_default = (
+                candidate_dirs[0] if candidate_dirs else "data/md_files/EXPERIMENT_NAME"
+            )
 
             md_dir = questionary.text(
                 "Diretório de trabalho da Dinâmica Molecular (onde contêm em.gro e topol.top):",
@@ -1100,9 +1191,13 @@ def interactive():
             md_path = Path(md_dir)
             target_id = md_prep.sanitize_target_id(md_path.name)
             if target_id.lower() in ("md_files", "screening", "data"):
-                candidates = list(md_path.glob("*_em.gro")) or list(md_path.glob("*_topol.top"))
+                candidates = list(md_path.glob("*_em.gro")) or list(
+                    md_path.glob("*_topol.top")
+                )
                 if candidates:
-                    target_id = candidates[0].stem.replace("_em", "").replace("_topol", "")
+                    target_id = (
+                        candidates[0].stem.replace("_em", "").replace("_topol", "")
+                    )
             target_id = md_prep.sanitize_target_id(target_id)
 
             start_time = time.time()
@@ -1149,7 +1244,9 @@ def interactive():
                         ),
                     }
 
-                    for step, status in md_equil.run_md_equilibration(md_path, target_id=target_id):
+                    for step, status in md_equil.run_md_equilibration(
+                        md_path, target_id=target_id
+                    ):
                         task_id = tasks[step]
                         if status == "start":
                             progress.start_task(task_id)
@@ -1244,8 +1341,12 @@ def interactive():
                 )
 
         elif choice == "7. Compilar TPR de Produção & Pacote para Cluster (SSH/tmux)":
-            candidate_dirs = [str(d) for d in (DATA_DIR / "md_files").glob("*") if d.is_dir()]
-            md_dir_default = candidate_dirs[0] if candidate_dirs else "data/md_files/7CFN"
+            candidate_dirs = [
+                str(d) for d in (DATA_DIR / "md_files").glob("*") if d.is_dir()
+            ]
+            md_dir_default = (
+                candidate_dirs[0] if candidate_dirs else "data/md_files/EXPERIMENT_NAME"
+            )
 
             md_dir = questionary.text(
                 "Diretório de trabalho da Dinâmica Molecular (onde contêm npt.gro e topol.top):",
@@ -1261,9 +1362,13 @@ def interactive():
             md_path = Path(md_dir)
             target_id = md_prep.sanitize_target_id(md_path.name)
             if target_id.lower() in ("md_files", "screening", "data"):
-                candidates = list(md_path.glob("*_npt.gro")) or list(md_path.glob("*_topol.top"))
+                candidates = list(md_path.glob("*_npt.gro")) or list(
+                    md_path.glob("*_topol.top")
+                )
                 if candidates:
-                    target_id = candidates[0].stem.replace("_npt", "").replace("_topol", "")
+                    target_id = (
+                        candidates[0].stem.replace("_npt", "").replace("_topol", "")
+                    )
             target_id = md_prep.sanitize_target_id(target_id)
 
             try:
@@ -1279,13 +1384,17 @@ def interactive():
                 console.print(
                     f"[yellow]Compilando {target_id}_md.tpr via GROMACS (grompp) e validando integridade...[/yellow]"
                 )
-                tpr_path = md_analysis.compile_production_tpr(md_path, target_id=target_id)
+                tpr_path = md_analysis.compile_production_tpr(
+                    md_path, target_id=target_id
+                )
                 console.print(
                     f"[bold green]✓ Arquivo '{tpr_path.name}' gerado e validado com sucesso em:[/bold green] [cyan]{tpr_path}[/cyan]"
                 )
 
                 # Exporta pacote standalone para cluster/SSH
-                export_dir = md_analysis.export_cluster_package(md_path, target_id=target_id)
+                export_dir = md_analysis.export_cluster_package(
+                    md_path, target_id=target_id
+                )
                 console.print(
                     f"\n[bold green]✓ Pacote Modular para Cluster exportado com sucesso em:[/bold green] [cyan]{export_dir}[/cyan]"
                 )
@@ -1341,8 +1450,12 @@ def interactive():
                 )
 
         elif choice == "8. Executar Produção da Dinâmica (100 ns)":
-            candidate_dirs = [str(d) for d in (DATA_DIR / "md_files").glob("*") if d.is_dir()]
-            md_dir_default = candidate_dirs[0] if candidate_dirs else "data/md_files/7CFN"
+            candidate_dirs = [
+                str(d) for d in (DATA_DIR / "md_files").glob("*") if d.is_dir()
+            ]
+            md_dir_default = (
+                candidate_dirs[0] if candidate_dirs else "data/md_files/EXPERIMENT_NAME"
+            )
 
             md_dir = questionary.text(
                 "Diretório de trabalho da Dinâmica Molecular (onde contêm npt.gro e topol.top):",
@@ -1358,9 +1471,13 @@ def interactive():
             md_path = Path(md_dir)
             target_id = md_prep.sanitize_target_id(md_path.name)
             if target_id.lower() in ("md_files", "screening", "data"):
-                candidates = list(md_path.glob("*_npt.gro")) or list(md_path.glob("*_topol.top"))
+                candidates = list(md_path.glob("*_npt.gro")) or list(
+                    md_path.glob("*_topol.top")
+                )
                 if candidates:
-                    target_id = candidates[0].stem.replace("_npt", "").replace("_topol", "")
+                    target_id = (
+                        candidates[0].stem.replace("_npt", "").replace("_topol", "")
+                    )
             target_id = md_prep.sanitize_target_id(target_id)
 
             start_time = time.time()
@@ -1465,8 +1582,12 @@ def interactive():
                 )
 
         elif choice == "9. Pós-processamento, Gráficos e MM-PBSA da DM":
-            candidate_dirs = [str(d) for d in (DATA_DIR / "md_files").glob("*") if d.is_dir()]
-            md_dir_default = candidate_dirs[0] if candidate_dirs else "data/md_files/7CFN"
+            candidate_dirs = [
+                str(d) for d in (DATA_DIR / "md_files").glob("*") if d.is_dir()
+            ]
+            md_dir_default = (
+                candidate_dirs[0] if candidate_dirs else "data/md_files/EXPERIMENT_NAME"
+            )
 
             md_dir = questionary.text(
                 "Diretório de trabalho da Dinâmica Molecular (onde contêm md.tpr e md.xtc):",
@@ -1482,7 +1603,9 @@ def interactive():
             md_path = Path(md_dir)
             target_id = md_prep.sanitize_target_id(md_path.name)
             if target_id.lower() in ("md_files", "screening", "data"):
-                candidates = list(md_path.glob("*_md.tpr")) or list(md_path.glob("*_md.xtc"))
+                candidates = list(md_path.glob("*_md.tpr")) or list(
+                    md_path.glob("*_md.xtc")
+                )
                 if candidates:
                     target_id = candidates[0].stem.replace("_md", "")
             target_id = md_prep.sanitize_target_id(target_id)
@@ -1536,7 +1659,9 @@ def interactive():
                             description="[4/4] Cálculo de Energia Livre MM-PBSA (Janela: 60 - 100 ns / Últimos 40% - Estado Estacionário)...",
                             total=1,
                         )
-                        mmpbsa_res = md_analysis.calculate_mmpbsa(md_path, target_id=target_id)
+                        mmpbsa_res = md_analysis.calculate_mmpbsa(
+                            md_path, target_id=target_id
+                        )
                         progress.update(task_mmpbsa, completed=1)
 
                 duration = time.time() - start_time
@@ -1604,9 +1729,13 @@ def interactive():
                     )
 
                     dg_bind = f"{energies['delta_g_binding']['mean']:.2f} ± {energies['delta_g_binding']['std']:.2f} {mmpbsa_res.get('unit', 'kcal/mol')}"
-                    details["MM-PBSA Janela"] = "60 - 100 ns (Últimos 40% - Estado Estacionário)"
+                    details["MM-PBSA Janela"] = (
+                        "60 - 100 ns (Últimos 40% - Estado Estacionário)"
+                    )
                     details["MM-PBSA ΔG Total (Ligação)"] = dg_bind
-                    details["Sumário JSON"] = str(md_path / f"{target_id}_mmpbsa_summary.json")
+                    details["Sumário JSON"] = str(
+                        md_path / f"{target_id}_mmpbsa_summary.json"
+                    )
 
                 # Envio do E-mail de Alerta
                 notifier.send_email_alert(
@@ -1685,10 +1814,10 @@ def interactive():
         elif choice == "10. Gerar Relatório Executivo (HTML) e Script PyMOL (3D)":
             # Sugere um diretório inteligente padrão se disponível
             default_dirs = [
-                "data/md_files/7CFN",
-                "data/screening/7CFN/desoxicolato",
-                "data/screening/desoxicolato",
-                "data/1OSV/results",
+                "data/md_files/EXPERIMENT_NAME",
+                "data/screening/EXPERIMENT_NAME/ligand",
+                "data/screening/ligand",
+                "data/EXPERIMENT_NAME/results",
                 "data/md_files",
                 "data",
             ]
@@ -1707,7 +1836,7 @@ def interactive():
 
             receptor_code = questionary.text(
                 "Código/Nome do Receptor (ex: 7CFN, GPBAR1):",
-                default="7CFN",
+                default="EXPERIMENT_NAME",
             ).ask()
 
             ligand_name = questionary.text(
@@ -1820,13 +1949,17 @@ def md_prep_command(
         ..., "--sdf", help="Caminho para o arquivo docked_poses.sdf gerado no docking"
     ),
     out: Path = typer.Option(
-        None, "--out", help="Diretório de saída para a Dinâmica Molecular (padrão: data/md_files/<target_id>)"
+        None,
+        "--out",
+        help="Diretório de saída para a Dinâmica Molecular (padrão: data/md_files/<target_id>)",
     ),
     target: str = typer.Option(
         None, "--target", help="Identificador único do alvo (ex: 7CFN, 1OSV, 4HG7)"
     ),
     purge: bool = typer.Option(
-        True, "--purge/--no-purge", help="Purgar arquivos residuais antigos do diretório de saída antes de iniciar"
+        True,
+        "--purge/--no-purge",
+        help="Purgar arquivos residuais antigos do diretório de saída antes de iniciar",
     ),
 ):
     """
@@ -1838,7 +1971,10 @@ def md_prep_command(
     sdf = Path(sdf)
 
     if not target:
-        if receptor.parent.name == "processed" and receptor.parent.parent.name not in ("data", ""):
+        if receptor.parent.name == "processed" and receptor.parent.parent.name not in (
+            "data",
+            "",
+        ):
             target = receptor.parent.parent.name
         else:
             target = receptor.stem.replace("_receptor", "").replace("_clean", "")
@@ -1916,7 +2052,9 @@ def md_prep_command(
                     start=False,
                 ),
                 "K": progress.add_task(
-                    description=f"[K] Grompp Definitivo ({target}_em.tpr)", total=1, start=False
+                    description=f"[K] Grompp Definitivo ({target}_em.tpr)",
+                    total=1,
+                    start=False,
                 ),
                 "L": progress.add_task(
                     description="[L] Minimização de Energia (mdrun)",
@@ -1925,7 +2063,9 @@ def md_prep_command(
                 ),
             }
 
-            for step, status in md_prep.prepare_md_system(receptor, sdf, out, target_id=target, purge=purge):
+            for step, status in md_prep.prepare_md_system(
+                receptor, sdf, out, target_id=target, purge=purge
+            ):
                 task_id = tasks[step]
                 if status == "start":
                     progress.start_task(task_id)
@@ -2017,7 +2157,9 @@ def md_equil_command(
     if not target:
         target = md_prep.sanitize_target_id(working_dir.name)
         if target.lower() in ("md_files", "screening", "data"):
-            candidates = list(working_dir.glob("*_em.gro")) or list(working_dir.glob("*_topol.top"))
+            candidates = list(working_dir.glob("*_em.gro")) or list(
+                working_dir.glob("*_topol.top")
+            )
             if candidates:
                 target = candidates[0].stem.replace("_em", "").replace("_topol", "")
     target = md_prep.sanitize_target_id(target)
@@ -2066,7 +2208,9 @@ def md_equil_command(
                 ),
             }
 
-            for step, status in md_equil.run_md_equilibration(working_dir, target_id=target):
+            for step, status in md_equil.run_md_equilibration(
+                working_dir, target_id=target
+            ):
                 task_id = tasks[step]
                 if status == "start":
                     progress.start_task(task_id)
@@ -2157,7 +2301,9 @@ def md_compile_command(
     if not target:
         target = md_prep.sanitize_target_id(working_dir.name)
         if target.lower() in ("md_files", "screening", "data"):
-            candidates = list(working_dir.glob("*_npt.gro")) or list(working_dir.glob("*_topol.top"))
+            candidates = list(working_dir.glob("*_npt.gro")) or list(
+                working_dir.glob("*_topol.top")
+            )
             if candidates:
                 target = candidates[0].stem.replace("_npt", "").replace("_topol", "")
     target = md_prep.sanitize_target_id(target)
@@ -2172,7 +2318,9 @@ def md_compile_command(
     )
 
     try:
-        console.print(f"[yellow]Compilando {target}_md.tpr via GROMACS (grompp) e validando integridade...[/yellow]")
+        console.print(
+            f"[yellow]Compilando {target}_md.tpr via GROMACS (grompp) e validando integridade...[/yellow]"
+        )
         tpr_path = md_analysis.compile_production_tpr(working_dir, target_id=target)
         console.print(
             f"[bold green]✓ Arquivo '{tpr_path.name}' gerado e validado com sucesso em:[/bold green] [cyan]{tpr_path}[/cyan]"
@@ -2224,7 +2372,9 @@ def md_export_command(
         None, "--target", help="Identificador único do alvo (ex: 7CFN, 1OSV, 4HG7)"
     ),
     output_export_dir: Path = typer.Option(
-        None, "--out", help="Diretório de exportação de destino (padrão: cluster_export/<target_id>)"
+        None,
+        "--out",
+        help="Diretório de exportação de destino (padrão: cluster_export/<target_id>)",
     ),
 ):
     """
@@ -2235,7 +2385,9 @@ def md_export_command(
     if not target:
         target = md_prep.sanitize_target_id(working_dir.name)
         if target.lower() in ("md_files", "screening", "data"):
-            candidates = list(working_dir.glob("*_md.tpr")) or list(working_dir.glob("*_npt.gro"))
+            candidates = list(working_dir.glob("*_md.tpr")) or list(
+                working_dir.glob("*_npt.gro")
+            )
             if candidates:
                 target = candidates[0].stem.replace("_md", "").replace("_npt", "")
     target = md_prep.sanitize_target_id(target)
@@ -2297,7 +2449,9 @@ def md_run_command(
     if not target:
         target = md_prep.sanitize_target_id(working_dir.name)
         if target.lower() in ("md_files", "screening", "data"):
-            candidates = list(working_dir.glob("*_npt.gro")) or list(working_dir.glob("*_topol.top"))
+            candidates = list(working_dir.glob("*_npt.gro")) or list(
+                working_dir.glob("*_topol.top")
+            )
             if candidates:
                 target = candidates[0].stem.replace("_npt", "").replace("_topol", "")
     target = md_prep.sanitize_target_id(target)
@@ -2318,7 +2472,9 @@ def md_run_command(
         )
         md_analysis.run_production_md(working_dir, target_id=target)
         duration = time.time() - start_time
-        console.print(f"[bold green]✓ Produção concluída com sucesso para {target}![/bold green]")
+        console.print(
+            f"[bold green]✓ Produção concluída com sucesso para {target}![/bold green]"
+        )
         console.print(
             f"[cyan]Execute 'md-postprocess --dir {working_dir}' para realizar o tratamento de PBC, gráficos e MM-PBSA.[/cyan]"
         )
@@ -2407,7 +2563,9 @@ def md_postprocess_command(
     if not target:
         target = md_prep.sanitize_target_id(working_dir.name)
         if target.lower() in ("md_files", "screening", "data"):
-            candidates = list(working_dir.glob("*_md.tpr")) or list(working_dir.glob("*_md.xtc"))
+            candidates = list(working_dir.glob("*_md.tpr")) or list(
+                working_dir.glob("*_md.xtc")
+            )
             if candidates:
                 target = candidates[0].stem.replace("_md", "")
     target = md_prep.sanitize_target_id(target)
@@ -2437,7 +2595,7 @@ def md_postprocess_command(
             progress.update(task_pbc, completed=1)
 
             task_traj = progress.add_task(
-                description=f"[2/4] Análises Estruturais Globais (0 - 100 ns: RMSD, RMSF, HBond, Rg, SASA, Clustering & CSVs)...",
+                description="[2/4] Análises Estruturais Globais (0 - 100 ns: RMSD, RMSF, HBond, Rg, SASA, Clustering & CSVs)...",
                 total=1,
             )
             md_analysis.analyze_trajectory(working_dir, target_id=target)
@@ -2523,7 +2681,9 @@ def md_postprocess_command(
             )
 
             dg_bind = f"{energies['delta_g_binding']['mean']:.2f} ± {energies['delta_g_binding']['std']:.2f} {mmpbsa_res.get('unit', 'kcal/mol')}"
-            details["MM-PBSA Janela"] = "60 - 100 ns (Últimos 40% - Estado Estacionário)"
+            details["MM-PBSA Janela"] = (
+                "60 - 100 ns (Últimos 40% - Estado Estacionário)"
+            )
             details["MM-PBSA ΔG Total (Ligação)"] = dg_bind
             details["Sumário JSON"] = str(working_dir / f"{target}_mmpbsa_summary.json")
 

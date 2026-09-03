@@ -5,7 +5,6 @@ Preserva todos os dados essenciais para reanálises completas e reprodutibilidad
 suportando arquitetura de Isolamento de Alvos (Target Isolation) e prefixos explícitos.
 """
 
-import os
 import shutil
 import sys
 from pathlib import Path
@@ -89,7 +88,9 @@ def archive_experiment(
     )
 
     if not exp_name:
-        default_name = f"DS-{target_id}" if target_id != "DEFAULT" else "DS-7CFN"
+        default_name = (
+            f"DS-{target_id}" if target_id != "DEFAULT" else "EXPERIMENT_NAME"
+        )
         try:
             user_input = input(
                 f"\nNome da pasta de arquivamento [{default_name}]: "

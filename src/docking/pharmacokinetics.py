@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Dict, Any, List, Optional
+from typing import List, Optional
 from rdkit import Chem
 from rdkit.Chem import Descriptors, Crippen, QED, FilterCatalog
 
@@ -67,15 +67,15 @@ def calculate_admet_descriptors(ligand_sdf: Path) -> dict:
         n_rings = int(mol.GetRingInfo().NumRings())
 
         # Estimativa de Acessibilidade Sintética (1.0 = muito fácil, 10.0 = muito complexo)
-        sa_raw = 1.0 + (mw / 180.0) + (rotb * 0.12) + (n_chiral * 0.75) + (n_rings * 0.35)
+        sa_raw = (
+            1.0 + (mw / 180.0) + (rotb * 0.12) + (n_chiral * 0.75) + (n_rings * 0.35)
+        )
         if fsp3 < 0.25:
             sa_raw += 0.4
         sa_score = round(min(10.0, max(1.0, sa_raw)), 2)
 
     except Exception as e:
-        raise RuntimeError(
-            f"Erro ao calcular descritores moleculares com RDKit: {e}"
-        )
+        raise RuntimeError(f"Erro ao calcular descritores moleculares com RDKit: {e}")
 
     # Classificação QED
     if qed_score >= 0.67:
@@ -117,7 +117,9 @@ def calculate_admet_descriptors(ligand_sdf: Path) -> dict:
 
     # 3. Filtros Complementares de Química Medicinal
     # Lead-likeness (Teague & Oprea): MW 150-350, LogP -1.0 a 3.5, RotB <= 7
-    lead_likeness_pass = bool(150.0 <= mw <= 350.0 and -1.0 <= logp <= 3.5 and rotb <= 7)
+    lead_likeness_pass = bool(
+        150.0 <= mw <= 350.0 and -1.0 <= logp <= 3.5 and rotb <= 7
+    )
 
     # Golden Triangle (Johnson & Zheng / Pfizer): MW 200-400, LogP -1.0 a 3.0
     golden_triangle_pass = bool(200.0 <= mw <= 400.0 and -1.0 <= logp <= 3.0)
@@ -181,7 +183,9 @@ def calculate_admet_descriptors(ligand_sdf: Path) -> dict:
                 toxic_alerts.append(name)
 
     all_structural_alerts = pains_alerts + brenk_alerts + toxic_alerts
-    has_severe_risk = (hia_status == "Baixa Absorção") or (len(all_structural_alerts) > 0)
+    has_severe_risk = (hia_status == "Baixa Absorção") or (
+        len(all_structural_alerts) > 0
+    )
 
     # Classificação de Veredito ADMET
     if total_violations == 0 and not has_severe_risk:
@@ -200,17 +204,37 @@ def calculate_admet_descriptors(ligand_sdf: Path) -> dict:
     # Mensagens Dinâmicas e Contextuais
     dynamic_points = []
     if verdict_category == "APPROVED":
-        dynamic_points.append("• Físico-Química: 100% de conformidade com as regras clássicas de Lipinski e Veber (0 violações).")
-        dynamic_points.append(f"• Drug-likeness (QED): Score {qed_score:.2f} ({qed_classification}) e Fsp3 = {fsp3:.2f}.")
-        dynamic_points.append("• Farmacocinética: Alta Absorção Intestinal (HIA) estimada pelo modelo Egan Egg.")
-        dynamic_points.append("• Toxicidade & PAINS: Nenhum alerta estrutural reativo ou subestrutura PAINS/Brenk identificada.")
+        dynamic_points.append(
+            "• Físico-Química: 100% de conformidade com as regras clássicas de Lipinski e Veber (0 violações)."
+        )
+        dynamic_points.append(
+            f"• Drug-likeness (QED): Score {qed_score:.2f} ({qed_classification}) e Fsp3 = {fsp3:.2f}."
+        )
+        dynamic_points.append(
+            "• Farmacocinética: Alta Absorção Intestinal (HIA) estimada pelo modelo Egan Egg."
+        )
+        dynamic_points.append(
+            "• Toxicidade & PAINS: Nenhum alerta estrutural reativo ou subestrutura PAINS/Brenk identificada."
+        )
         attention_note = "A molécula possui excelente perfil biofarmacêutico, químico-medicinal e físico-químico para desenvolvimento oral."
     elif verdict_category == "MODERATE":
-        single_viol = all_violations[0] if all_violations else "Desvio pontual em parâmetro físico-químico"
-        dynamic_points.append(f"• Desvio Pontual Tolerado: {single_viol} (desvio único aceito em fármacos aprovados).")
-        dynamic_points.append(f"• Drug-likeness (QED): Score {qed_score:.2f} ({qed_classification}) e Fsp3 = {fsp3:.2f}.")
-        dynamic_points.append("• Farmacocinética: Mantém Alta Absorção Intestinal (HIA) estimada (Egan Egg).")
-        dynamic_points.append("• Toxicidade: Ausência de subestruturas tóxicas severas ou PAINS.")
+        single_viol = (
+            all_violations[0]
+            if all_violations
+            else "Desvio pontual em parâmetro físico-químico"
+        )
+        dynamic_points.append(
+            f"• Desvio Pontual Tolerado: {single_viol} (desvio único aceito em fármacos aprovados)."
+        )
+        dynamic_points.append(
+            f"• Drug-likeness (QED): Score {qed_score:.2f} ({qed_classification}) e Fsp3 = {fsp3:.2f}."
+        )
+        dynamic_points.append(
+            "• Farmacocinética: Mantém Alta Absorção Intestinal (HIA) estimada (Egan Egg)."
+        )
+        dynamic_points.append(
+            "• Toxicidade: Ausência de subestruturas tóxicas severas ou PAINS."
+        )
         if rotb > 10:
             attention_note = f"A molécula apresenta alta flexibilidade conformacional (RotB = {rotb}, limite <= 10), mas mantém bom perfil de absorção e ausência de toxicidade."
         elif mw > 500:
@@ -224,35 +248,53 @@ def calculate_admet_descriptors(ligand_sdf: Path) -> dict:
     else:
         reasons = []
         if total_violations >= 2:
-            reasons.append(f"Múltiplas violações físico-químicas ({total_violations} violações: {', '.join(all_violations)})")
+            reasons.append(
+                f"Múltiplas violações físico-químicas ({total_violations} violações: {', '.join(all_violations)})"
+            )
         elif total_violations == 1:
             reasons.append(f"Violação físico-química: {all_violations[0]}")
 
         if hia_status == "Baixa Absorção":
-            reasons.append("Baixa Absorção Intestinal (HIA) estimada (fora da elipse de Egan)")
+            reasons.append(
+                "Baixa Absorção Intestinal (HIA) estimada (fora da elipse de Egan)"
+            )
 
         if len(all_structural_alerts) > 0:
-            reasons.append(f"Alertas de Toxicidade/PAINS: {', '.join(all_structural_alerts)}")
+            reasons.append(
+                f"Alertas de Toxicidade/PAINS: {', '.join(all_structural_alerts)}"
+            )
 
         dynamic_points.append(f"• Problemas Identificados: {'; '.join(reasons)}.")
         if hia_status == "Alta Absorção":
-            dynamic_points.append("• Farmacocinética: Alta Absorção Intestinal (HIA) preservada.")
+            dynamic_points.append(
+                "• Farmacocinética: Alta Absorção Intestinal (HIA) preservada."
+            )
         if len(all_structural_alerts) == 0:
             dynamic_points.append("• Toxicidade: Sem alertas estruturais de PAINS.")
 
         attention_parts = []
         if total_violations >= 2:
-            attention_parts.append(f"propriedades físico-químicas desfavoráveis ({', '.join(all_violations)})")
-        elif total_violations == 1 and (hia_status == "Baixa Absorção" or len(all_structural_alerts) > 0):
+            attention_parts.append(
+                f"propriedades físico-químicas desfavoráveis ({', '.join(all_violations)})"
+            )
+        elif total_violations == 1 and (
+            hia_status == "Baixa Absorção" or len(all_structural_alerts) > 0
+        ):
             attention_parts.append(f"desvio físico-químico ({all_violations[0]})")
 
         if hia_status == "Baixa Absorção":
             attention_parts.append("baixa absorção intestinal (HIA)")
 
         if len(all_structural_alerts) > 0:
-            attention_parts.append(f"riscos de toxicidade por subestruturas reativas ({', '.join(all_structural_alerts)})")
+            attention_parts.append(
+                f"riscos de toxicidade por subestruturas reativas ({', '.join(all_structural_alerts)})"
+            )
 
-        attention_note = f"A molécula apresenta {' e '.join(attention_parts)}." if attention_parts else "A molécula não atingiu os critérios mínimos de triagem ADMET."
+        attention_note = (
+            f"A molécula apresenta {' e '.join(attention_parts)}."
+            if attention_parts
+            else "A molécula não atingiu os critérios mínimos de triagem ADMET."
+        )
 
     return {
         "molecular_weight": round(mw, 2),

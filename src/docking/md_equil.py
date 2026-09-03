@@ -39,7 +39,9 @@ def run_md_equilibration(
 
     gmx_bin = find_executable("gmx")
     if not gmx_bin:
-        raise DependencyError("O executável 'gmx' (GROMACS) não foi encontrado no PATH.")
+        raise DependencyError(
+            "O executável 'gmx' (GROMACS) não foi encontrado no PATH."
+        )
 
     def run_command(cmd, cwd, input_val=None, step_name="", expect_zero_only=True):
         try:
@@ -272,4 +274,3 @@ def run_md_equilibration(
     if (md_dir / f"{prefix}npt.gro").exists():
         shutil.copy2(md_dir / f"{prefix}npt.gro", md_dir / "npt.gro")
     yield "E", "success"
-
