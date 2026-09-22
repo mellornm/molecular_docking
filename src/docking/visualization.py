@@ -1,9 +1,10 @@
 import json
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple, Union
 
 
 def _find_structure_file(work_dir: Path) -> Optional[Path]:
@@ -35,22 +36,136 @@ def _find_structure_file(work_dir: Path) -> Optional[Path]:
     return None
 
 
-def generate_pymol_script(work_dir: Path) -> Path:
+def _normalize_residues(residues: Optional[Sequence[Any]]) -> List[str]:
     """
-    Gera um script automatizado do PyMOL (show_complex.pml) no diretório de trabalho,
-    configurando representação visual científica de alta fidelidade:
-    - Suporte a execução independente de caminho (os.chdir embutido via Python API do PyMOL)
-    - Conversão e carregamento de estrutura limpa sem solvente (md_clean_nowat.pdb / md_clean.pdb)
-    - Carregamento da trajetória ajustada md_fit.xtc
-    - Fundo branco de publicação (set bg_rgb, [1, 1, 1])
-    - Proteína em cartoon ciano suave (color cyan, polymer)
-    - Ligante (LIG) em bastões coloridos por elemento (color magenta)
-    - Seleção e destaque em bastões dos resíduos do sítio ativo mapeados no interactions.json
-    - Linhas tracejadas amarelas para pontes de hidrogênio com rótulos de distância
-    - Foco e enquadramento automático do ligante (center, zoom, orient)
+    Normaliza sequências de identificadores de resíduos (int, str, dict do PLIP ou objetos)
+    em uma lista ordenada e única de strings numéricas/identificadores para seleção no PyMOL.
+    Exemplos aceitos:
+      - [57, 102, 195] -> ['57', '102', '195']
+      - ['57', '102'] -> ['57', '102']
+      - ['His57', 'Asp102'] -> ['57', '102']
+      - [{'resnr': 57, 'resname': 'HIS'}, ...] -> ['57']
+    """
+    if not residues:
+        return []
+    result: List[str] = []
+    for item in residues:
+        if item is None:
+            continue
+        if isinstance(item, dict):
+            res = item.get("resnr") or item.get("resi") or item.get("residue")
+            if res is not None:
+                result.append(str(res).strip())
+        elif isinstance(item, (int, float)):
+            result.append(str(int(item)))
+        elif isinstance(item, str):
+            parts = [p.strip() for p in re.split(r"[,+\s]+", item.strip()) if p.strip()]
+            for part in parts:
+                m = re.search(r"(\d+[A-Za-z]?)", part)
+                if m:
+                    result.append(m.group(1))
+                else:
+                    result.append(part)
+        else:
+            res = getattr(item, "resnr", None) or getattr(item, "resi", None)
+            if res is not None:
+                result.append(str(res).strip())
 
-    :param work_dir: Diretório de trabalho contendo md_clean.gro / complex.pdb e interactions.json.
-    :return: Caminho do arquivo show_complex.pml gerado.
+    seen: Set[str] = set()
+    unique: List[str] = []
+    for r in result:
+        if r not in seen:
+            seen.add(r)
+            unique.append(r)
+
+    try:
+        unique.sort(
+            key=lambda x: int(re.match(r"^\d+", x).group(0))
+            if re.match(r"^\d+", x)
+            else 999999
+        )
+    except Exception:
+        pass
+
+    return unique
+
+
+def _extract_interactions_and_residues(
+    work_dir: Path, interactions_data: Optional[Dict[str, Any]] = None
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[int]]:
+    """
+    Recupera interações (pontes de hidrogênio e contatos hidrofóbicos) e lista de resíduos
+    a partir de interactions_data em memória ou localizando o arquivo interactions.json.
+    """
+    hbonds: List[Dict[str, Any]] = []
+    hcontacts: List[Dict[str, Any]] = []
+    key_residue_numbers: Set[int] = set()
+
+    if interactions_data is not None:
+        hbonds = interactions_data.get("hydrogen_bonds", [])
+        hcontacts = interactions_data.get("hydrophobic_contacts", [])
+    else:
+        interactions_file = work_dir / "interactions.json"
+        if not interactions_file.exists():
+            matches = (
+                list(work_dir.glob("*_interactions.json"))
+                or list(work_dir.glob("*/interactions.json"))
+                or list(work_dir.glob("*/*_interactions.json"))
+            )
+            if matches:
+                interactions_file = matches[0]
+
+        if interactions_file and interactions_file.exists():
+            try:
+                with open(interactions_file, "r", encoding="utf-8") as f:
+                    inter_data = json.load(f)
+                    hbonds = inter_data.get("hydrogen_bonds", [])
+                    hcontacts = inter_data.get("hydrophobic_contacts", [])
+            except Exception:
+                hbonds = []
+                hcontacts = []
+
+    for hb in hbonds:
+        resnr = hb.get("resnr")
+        if resnr:
+            try:
+                key_residue_numbers.add(int(resnr))
+            except (ValueError, TypeError):
+                pass
+
+    for hc in hcontacts:
+        resnr = hc.get("resnr")
+        if resnr:
+            try:
+                key_residue_numbers.add(int(resnr))
+            except (ValueError, TypeError):
+                pass
+
+    return hbonds, hcontacts, sorted(list(key_residue_numbers))
+
+
+def generate_pymol_script(
+    work_dir: Union[str, Path],
+    key_residues: Optional[Sequence[Any]] = None,
+    catalytic_residues: Optional[Sequence[Any]] = None,
+    interactions_data: Optional[Dict[str, Any]] = None,
+) -> Path:
+    """
+    Gera um script automatizado do PyMOL (show_complex.pml) com padrão estético de publicação científica:
+    - Fundo branco (bg_color white), ray_shadows 0, antialias 2, depth_cue 0, specular 0.1
+    - Proteína em cartoon branco, sobreposta com superfície também branca e transparência 0.85
+    - Ligante em bastões (sticks) com stick_radius 0.25 (carbonos em magenta, oxigênios em vermelho, nitrogênios em azul)
+    - Resíduos-chave dinâmicos (PLIP) em bastões com carbonos em gray80 (sem valores fixos/chumbados no código)
+    - Resíduos catalíticos opcionais destacados em verde nos carbonos
+    - Interações de pontes de hidrogênio tracejadas em deepblue (dash_width 4.0, dash_gap 0.3) sem rótulos numéricos
+    - Legendas de resíduos em preto, fonte limpa 7, tamanho 26, posição [0, 0, 1.5] e formato contínuo (ex: 'His57')
+    - Enquadramento final centralizado e focado no ligante com zoom 4.5
+
+    :param work_dir: Diretório contendo a estrutura (complex.pdb / md_clean.pdb) e opcionalmente interactions.json.
+    :param key_residues: Lista opcional de resíduos-chave (ex: ints, strings 'His57', ou dicts do PLIP). Se None, extrai do interactions.json.
+    :param catalytic_residues: Lista opcional de resíduos catalíticos para destacar os carbonos em verde.
+    :param interactions_data: Dicionário opcional contendo 'hydrogen_bonds' e 'hydrophobic_contacts'.
+    :return: Path para o arquivo show_complex.pml gerado.
     """
     work_dir = Path(work_dir).resolve()
     if not work_dir.exists():
@@ -65,9 +180,12 @@ def generate_pymol_script(work_dir: Path) -> Path:
     # 0. Tenta gerar versões PDB sem água para carregamento e renderização instantâneos no PyMOL
     gmx_bin = shutil.which("gmx")
     if not gmx_bin:
-        from docking.md_prep import find_executable
+        try:
+            from docking.md_prep import find_executable
 
-        gmx_bin = find_executable("gmx")
+            gmx_bin = find_executable("gmx")
+        except Exception:
+            gmx_bin = None
 
     tpr_file = work_dir / "md.tpr"
     if not tpr_file.exists():
@@ -236,43 +354,19 @@ def generate_pymol_script(work_dir: Path) -> Path:
         else (medoid_file.name if medoid_file and medoid_file.exists() else None)
     )
 
-    # Leitura do interactions.json (se existir)
-    interactions_file = work_dir / "interactions.json"
-    if not interactions_file.exists():
-        matches = (
-            list(work_dir.glob("*_interactions.json"))
-            or list(work_dir.glob("*/interactions.json"))
-            or list(work_dir.glob("*/*_interactions.json"))
-        )
-        if matches:
-            interactions_file = matches[0]
+    # Extração e normalização de dados de interação
+    hbonds, hcontacts, extracted_resnrs = _extract_interactions_and_residues(
+        work_dir, interactions_data
+    )
 
-    hbonds: List[Dict[str, Any]] = []
-    hcontacts: List[Dict[str, Any]] = []
+    # Resíduos-chave dinâmicos: argumento explícito > extração PLIP
+    if key_residues is not None:
+        key_res_list = _normalize_residues(key_residues)
+    else:
+        key_res_list = _normalize_residues(extracted_resnrs)
 
-    if interactions_file and interactions_file.exists():
-        try:
-            with open(interactions_file, "r", encoding="utf-8") as f:
-                inter_data = json.load(f)
-                hbonds = inter_data.get("hydrogen_bonds", [])
-                hcontacts = inter_data.get("hydrophobic_contacts", [])
-        except Exception:
-            hbonds = []
-            hcontacts = []
-
-    # Extrai conjunto de resíduos únicos do sítio ativo
-    key_residue_numbers: Set[int] = set()
-    for hb in hbonds:
-        resnr = hb.get("resnr")
-        if resnr:
-            key_residue_numbers.add(int(resnr))
-
-    for hc in hcontacts:
-        resnr = hc.get("resnr")
-        if resnr:
-            key_residue_numbers.add(int(resnr))
-
-    sorted_resnrs = sorted(list(key_residue_numbers))
+    # Resíduos catalíticos opcionais
+    cat_res_list = _normalize_residues(catalytic_residues)
 
     work_dir_posix = str(work_dir).replace("\\", "/")
 
@@ -281,6 +375,7 @@ def generate_pymol_script(work_dir: Path) -> Path:
         "# ==============================================================================",
         "# PyMOL Automated Visualization Script",
         "# Generated automatically by Molecular Docking Pipeline",
+        "# Publication Quality Preset",
         "# ==============================================================================",
         "",
         "# 0. Garantia de Diretório de Trabalho Autônomo (Python API do PyMOL)",
@@ -292,13 +387,13 @@ def generate_pymol_script(work_dir: Path) -> Path:
         "    pass",
         "python end",
         "",
-        "# 1. Inicialização e Configurações de Fundo e Renderização",
+        "# 1. Iluminação, Fundo e Configurações de Renderização",
         "reinitialize",
-        "set bg_rgb, [1, 1, 1]",
+        "bg_color white",
         "set ray_shadows, 0",
         "set antialias, 2",
-        "set depth_cue, 1",
-        "set specular, 0.25",
+        "set depth_cue, 0",
+        "set specular, 0.1",
         "set cartoon_fancy_helices, 1",
         "set cartoon_smooth_loops, 1",
         "",
@@ -339,39 +434,39 @@ def generate_pymol_script(work_dir: Path) -> Path:
     pml_lines.extend(
         [
             "",
-            "# 3. Limpeza de Solvente e Representação da Proteína (Cartoon)",
+            "# 3. Limpeza de Solvente e Representação da Proteína (Cartoon Branco + Superfície Translúcida)",
             "remove resn SOL or resn HOH or resn TIP3 or resn NA or resn CL or resn ION",
             "hide everything, complex",
             "show cartoon, complex and polymer",
-            "color cyan, complex and polymer",
-            "set cartoon_transparency, 0.15, complex and polymer",
+            "color white, complex and polymer",
+            "show surface, complex and polymer",
+            "color white, complex and polymer",
+            "set transparency, 0.85, complex and polymer",
             "",
             "# 4. Representação do Ligante (Sticks)",
             "select ligand, complex and (resn LIG or resn UNK or resn UNL or resn MOL or resn ligand_md or (not polymer and not solvent))",
             "show sticks, ligand",
-            "color magenta, ligand",
-            "util.cnc ligand",
             "set stick_radius, 0.25, ligand",
+            "color magenta, ligand",
+            "color magenta, ligand and elem C",
+            "color red, ligand and elem O",
+            "color blue, ligand and elem N",
             "",
         ]
     )
 
-    # 5. Seleção e exibição dos resíduos do sítio ativo
-    if sorted_resnrs:
-        resi_selection = "+".join(str(r) for r in sorted_resnrs)
+    # 5. Resíduos Dinâmicos (PLIP) e Resíduos Catalíticos Opcionais
+    if key_res_list:
+        resi_selection = "+".join(key_res_list)
         pml_lines.extend(
             [
-                "# 5. Resíduos Chave de Interação Mapeados pelo PLIP",
+                "# 5. Resíduos Chave de Interação Mapeados pelo PLIP (Carbonos em gray80)",
                 f"select key_residues, polymer and resi {resi_selection}",
                 "show sticks, key_residues",
+                "set stick_radius, 0.20, key_residues",
                 "color gray80, key_residues and elem C",
-                "util.cnc key_residues",
-                "set stick_radius, 0.18, key_residues",
-                'label key_residues and name CA, "%s %s" % (resn, resi)',
-                "set label_size, 14",
-                "set label_color, black",
-                "set label_font_id, 7",
-                "set label_position, [0, 0, 1.5]",
+                "color red, key_residues and elem O",
+                "color blue, key_residues and elem N",
                 "",
             ]
         )
@@ -381,52 +476,86 @@ def generate_pymol_script(work_dir: Path) -> Path:
                 "# 5. Resíduos do Sítio de Ligação (Raio de Proximidade 5Å)",
                 "select key_residues, polymer within 5.0 of ligand",
                 "show sticks, key_residues",
+                "set stick_radius, 0.20, key_residues",
                 "color gray80, key_residues and elem C",
-                "util.cnc key_residues",
-                "set stick_radius, 0.18, key_residues",
-                'label key_residues and name CA, "%s %s" % (resn, resi)',
-                "set label_size, 14",
-                "set label_color, black",
+                "color red, key_residues and elem O",
+                "color blue, key_residues and elem N",
                 "",
             ]
         )
 
-    # 6. Pontes de Hidrogênio com distâncias e linhas tracejadas amarelas
+    if cat_res_list:
+        cat_selection = "+".join(cat_res_list)
+        pml_lines.extend(
+            [
+                "# 5.1 Resíduos Catalíticos (Carbonos em Verde)",
+                f"select catalytic_residues, polymer and resi {cat_selection}",
+                "show sticks, catalytic_residues",
+                "set stick_radius, 0.20, catalytic_residues",
+                "color green, catalytic_residues and elem C",
+                "color red, catalytic_residues and elem O",
+                "color blue, catalytic_residues and elem N",
+                "",
+            ]
+        )
+
+    # 5.2 Legendas e Rótulos Contínuos (ex: 'His57')
+    if key_res_list and cat_res_list:
+        label_target = "(key_residues or catalytic_residues)"
+    elif key_res_list:
+        label_target = "key_residues"
+    elif cat_res_list:
+        label_target = "catalytic_residues"
+    else:
+        label_target = "key_residues"
+
+    pml_lines.extend(
+        [
+            "# 5.2 Rótulos dos Resíduos em Preto (Tamanho 26, Fonte 7, Posição [0, 0, 1.5], Formato 'His57')",
+            f'label {label_target} and name CA, "%s%s" % (resn.capitalize(), resi)',
+            "set label_color, black",
+            "set label_font_id, 7",
+            "set label_size, 26",
+            "set label_position, [0, 0, 1.5]",
+            "",
+        ]
+    )
+
+    # 6. Interações e Linhas Tracejadas (deepblue, dash_width 4.0, dash_gap 0.3, hide labels)
     if hbonds:
-        pml_lines.append("# 6. Pontes de Hidrogênio (Linhas Tracejadas Amarelas)")
-        unique_hb_pairs: Set[int] = set()
-        for idx, hb in enumerate(hbonds, 1):
+        pml_lines.append(
+            "# 6. Pontes de Hidrogênio (Linhas Tracejadas Deepblue sem Rótulos Numéricos)"
+        )
+        unique_hb_pairs: Set[Any] = set()
+        for hb in hbonds:
             resnr = hb.get("resnr")
-            resname = hb.get("resname", "RES")
+            resname = str(hb.get("resname", "RES")).capitalize()
             if resnr and resnr not in unique_hb_pairs:
                 unique_hb_pairs.add(resnr)
-                pml_lines.append(f"# H-Bond {resname} {resnr}")
+                dist_name = f"hb_{resname}_{resnr}"
+                pml_lines.append(f"# H-Bond {resname}{resnr}")
                 pml_lines.append(
-                    f"distance hb_{resname}_{resnr}, (polymer and resi {resnr}), (ligand), 4.2, mode=2"
+                    f"distance {dist_name}, (polymer and resi {resnr}), (ligand), 4.2, mode=2"
                 )
+                pml_lines.append(f"hide labels, {dist_name}")
 
         pml_lines.extend(
             [
-                "set dash_color, yellow",
-                "set dash_gap, 0.25",
-                "set dash_width, 3.0",
+                "set dash_color, deepblue",
+                "set dash_gap, 0.3",
+                "set dash_width, 4.0",
                 "set dash_radius, 0.05",
-                "set label_color, black",
-                "set label_size, 12",
                 "",
             ]
         )
 
-    # 7. Centralização e Foco
+    # 7. Enquadramento e Foco Final no Ligante
     pml_lines.extend(
         [
-            "# 7. Centralização e Foco no Sítio Ativo",
-            "center ligand",
-            "zoom ligand, 8",
-            "orient ligand",
-            "",
-            "# Deselecionar tudo para limpar a visualização",
+            "# 7. Enquadramento e Foco Final no Sítio de Ligação",
             "deselect",
+            "center ligand",
+            "zoom ligand, 4.5",
             "",
         ]
     )
