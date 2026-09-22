@@ -2786,18 +2786,31 @@ def report_command(
         "--ligand",
         help="Nome ou identificador do ligante (ex: INT-777, Desoxicolato)",
     ),
+    pml_only: bool = typer.Option(
+        False,
+        "--pml-only",
+        help="Regera apenas o script .pml de visualização do PyMOL (sem recompilar o relatório HTML)",
+    ),
+    catalytic: str = typer.Option(
+        None,
+        "--catalytic",
+        help="Resíduos catalíticos separados por vírgula para destacar em verde (ex: '57,102,195' ou 'His57,Asp102')",
+    ),
 ):
     """
     RELATÓRIO EXECUTIVO (HTML) E VISUALIZAÇÃO 3D (PyMOL):
     1. Consolida resultados de docking (Vina), PLIP, ADMET, Gráficos de DM e MM-PBSA em um relatório HTML moderno e autoconferível.
     2. Gera o script PyMOL (.pml) automatizado para visualização 3D do complexo ligante-receptor e suas interações.
     """
+    import re
+
     work_dir = Path(work_dir)
     console.print(
         Panel.fit(
             f"[bold blue]Geração de Relatório Executivo e Visualização 3D[/bold blue]\n"
             f"Diretório de Trabalho: {work_dir}\n"
-            f"Receptor: {receptor or 'Não informado'} | Ligante: {ligand or 'Não informado'}",
+            f"Receptor: {receptor or 'Não informado'} | Ligante: {ligand or 'Não informado'}"
+            + (f" | Catalíticos: {catalytic}" if catalytic else ""),
             border_style="blue",
         )
     )
@@ -2807,6 +2820,24 @@ def report_command(
             f"[bold red]Erro:[/bold red] Diretório de trabalho não encontrado: {work_dir}"
         )
         raise typer.Exit(code=1)
+
+    cat_res = None
+    if catalytic:
+        cat_res = [c.strip() for c in re.split(r"[,+\s]+", catalytic.strip()) if c.strip()]
+
+    # Modo somente PyMOL: pula a compilação HTML e regera show_complex.pml instantaneamente
+    if pml_only:
+        try:
+            pml_path = visualization.generate_pymol_script(work_dir, catalytic_residues=cat_res)
+            console.print("\n[bold green]✓ Script PyMOL gerado com sucesso![/bold green]")
+            console.print(f"  • [bold]Script PyMOL (3D):[/bold] [cyan]{pml_path}[/cyan]")
+            console.print(
+                "    [dim]Para abrir a cena 3D, execute no terminal: pymol show_complex.pml[/dim]"
+            )
+            return
+        except Exception as e:
+            console.print(f"\n[bold red]Erro ao gerar script PyMOL:[/bold red] {e}")
+            raise typer.Exit(code=1)
 
     try:
         with Progress(
@@ -2828,7 +2859,7 @@ def report_command(
                 total=1,
             )
             try:
-                pml_path = visualization.generate_pymol_script(work_dir)
+                pml_path = visualization.generate_pymol_script(work_dir, catalytic_residues=cat_res)
             except Exception as e:
                 pml_path = None
                 missing.append(f"PyMOL Script: {e}")
