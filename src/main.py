@@ -410,7 +410,9 @@ def validate(
             if not plip_ok:
                 raise RuntimeError(plip_msg)
 
-            interactions = analysis.parse_plip_xml(results_dir / "complex_report.xml")
+            interactions = analysis.parse_plip_xml(
+                results_dir / "complex_report.xml", pdb_path=complex_pdb
+            )
 
             # Triagem ADMET
             try:
@@ -657,7 +659,9 @@ def screen(
             if not plip_ok:
                 raise RuntimeError(plip_msg)
 
-            interactions = analysis.parse_plip_xml(results_dir / "complex_report.xml")
+            interactions = analysis.parse_plip_xml(
+                results_dir / "complex_report.xml", pdb_path=complex_pdb
+            )
 
             # Triagem ADMET
             try:

@@ -161,11 +161,19 @@ def parse_pipeline_artifacts(work_dir: Path) -> Tuple[Dict[str, Any], List[str]]
         except Exception as e:
             warnings.append(f"Erro ao processar 'interactions.json': {e}")
 
-    # Fallback automático: se interactions.json não tinha contatos, tenta carregar direto do XML do PLIP
+    # Fallback / Auto-correção: se interactions.json não tinha contatos ou possuía resíduos '0' (bug legado de código de inserção)
+    has_zero_resnr = any(
+        str(hb.get("resnr", "0")).strip() in ("0", "")
+        for hb in data["interactions"]["hydrogen_bonds"]
+    ) or any(
+        str(hc.get("resnr", "0")).strip() in ("0", "")
+        for hc in data["interactions"]["hydrophobic_contacts"]
+    )
+
     if (
         not data["interactions"]["hydrogen_bonds"]
         and not data["interactions"]["hydrophobic_contacts"]
-    ):
+    ) or has_zero_resnr:
         xml_candidates = list(work_dir.glob("*report*.xml")) + [work_dir / "report.xml"]
         for xml_c in xml_candidates:
             if xml_c.exists():
@@ -173,16 +181,16 @@ def parse_pipeline_artifacts(work_dir: Path) -> Tuple[Dict[str, Any], List[str]]
                     from docking.analysis import parse_plip_xml
 
                     parsed_inter = parse_plip_xml(xml_c)
-                    data["interactions"]["hydrogen_bonds"] = parsed_inter.get(
-                        "hydrogen_bonds", []
-                    )
-                    data["interactions"]["hydrophobic_contacts"] = parsed_inter.get(
-                        "hydrophobic_contacts", []
-                    )
                     if (
-                        data["interactions"]["hydrogen_bonds"]
-                        or data["interactions"]["hydrophobic_contacts"]
+                        parsed_inter.get("hydrogen_bonds")
+                        or parsed_inter.get("hydrophobic_contacts")
                     ):
+                        data["interactions"]["hydrogen_bonds"] = parsed_inter.get(
+                            "hydrogen_bonds", []
+                        )
+                        data["interactions"]["hydrophobic_contacts"] = parsed_inter.get(
+                            "hydrophobic_contacts", []
+                        )
                         break
                 except Exception:
                     pass

@@ -1,7 +1,9 @@
+import re
 import shutil
 import subprocess
 import xml.etree.ElementTree as ET
 from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
 
 from rdkit import Chem
 from rdkit.Chem import rdMolAlign
@@ -174,10 +176,249 @@ def run_plip_docker(complex_pdb: Path, output_dir: Path):
         return False, f"Erro ao iniciar o container Docker do PLIP: {str(e)}"
 
 
-def parse_plip_xml(xml_path: Path):
+def _find_pdb_for_xml(
+    xml_path: Path, pdb_path: Optional[Path] = None
+) -> Optional[Path]:
+    """
+    Localiza o arquivo PDB correspondente (complex.pdb ou receptor.pdb)
+    para validação e resgate de rótulos de resíduos com códigos de inserção.
+    """
+    if pdb_path is not None:
+        p = Path(pdb_path).resolve()
+        if p.exists():
+            return p
+
+    xml_path = Path(xml_path).resolve()
+    xml_dir = xml_path.parent
+
+    # 1. complex.pdb direto no diretório do XML
+    direct_complex = xml_dir / "complex.pdb"
+    if direct_complex.exists():
+        return direct_complex
+
+    # 2. PDB com stem similar (ex.: 1H1B_complex_report.xml -> 1H1B_complex.pdb)
+    stem_clean = (
+        xml_path.stem.replace("_report", "").replace("report", "").strip("_")
+    )
+    if stem_clean:
+        stem_pdb = xml_dir / f"{stem_clean}.pdb"
+        if stem_pdb.exists():
+            return stem_pdb
+
+    # 3. Qualquer *complex*.pdb (evitando plipfixed)
+    complex_cands = [
+        p
+        for p in xml_dir.glob("*complex*.pdb")
+        if not p.name.startswith("plipfixed")
+    ]
+    if complex_cands:
+        return complex_cands[0]
+
+    # 4. receptor.pdb no diretório
+    rec_pdb = xml_dir / "receptor.pdb"
+    if rec_pdb.exists():
+        return rec_pdb
+
+    # 5. Qualquer *.pdb válido no diretório
+    any_pdbs = [
+        p
+        for p in xml_dir.glob("*.pdb")
+        if not p.name.startswith("plipfixed") and "clean" not in p.name
+    ]
+    if any_pdbs:
+        return any_pdbs[0]
+
+    # 6. Diretório pai ou irmãos estruturais (processed/receptor.pdb, results/complex.pdb)
+    parent_cands = [
+        xml_dir.parent / "processed" / "receptor.pdb",
+        xml_dir.parent / "results" / "complex.pdb",
+        xml_dir.parent / "complex.pdb",
+    ]
+    for pc in parent_cands:
+        if pc.exists():
+            return pc
+
+    return None
+
+
+def _load_pdb_residue_mapping(pdb_path: Optional[Path]):
+    """
+    Lê o arquivo PDB e constrói tabelas de dispersão por coordenadas 3D, número serial de átomo
+    e índice sequencial para resgatar o identificador canônico do resíduo (resname, resnr com
+    código de inserção como '62B' e chain).
+    """
+    coords_map: Dict[Tuple[float, float, float], Dict[str, Any]] = {}
+    serials_map: Dict[int, Dict[str, Any]] = {}
+    index_map: Dict[int, Dict[str, Any]] = {}
+    atom_list: List[Tuple[Tuple[float, float, float], Dict[str, Any]]] = []
+
+    if not pdb_path or not Path(pdb_path).exists():
+        return coords_map, serials_map, index_map, atom_list
+
+    atom_count = 0
+    try:
+        with open(pdb_path, "r", encoding="utf-8", errors="ignore") as f:
+            for line in f:
+                if not line.startswith(("ATOM  ", "HETATM")):
+                    continue
+
+                resname = line[17:20].strip()
+                # Ignora ligantes e solventes adicionados ao complexo
+                if resname in ("LIG", "HOH", "WAT", "DOD"):
+                    continue
+
+                chain = line[21].strip() if len(line) > 21 else ""
+                resnum_str = line[22:26].strip() if len(line) > 25 else ""
+                icode = line[26].strip() if len(line) > 26 else ""
+
+                if not resnum_str:
+                    continue
+
+                try:
+                    resnum_int = int(resnum_str)
+                    # Preserva a letra de inserção se existir (ex.: '62B'), senão int puro (ex.: 62)
+                    resnr_val: Any = f"{resnum_int}{icode}" if icode else resnum_int
+                except ValueError:
+                    resnr_val = f"{resnum_str}{icode}".strip()
+
+                serial = None
+                try:
+                    serial = int(line[6:11].strip())
+                except ValueError:
+                    pass
+
+                coord = None
+                try:
+                    x = float(line[30:38].strip())
+                    y = float(line[38:46].strip())
+                    z = float(line[46:54].strip())
+                    coord = (round(x, 3), round(y, 3), round(z, 3))
+                except ValueError:
+                    pass
+
+                atom_count += 1
+                atom_info = {
+                    "resname": resname,
+                    "resnr": resnr_val,
+                    "chain": chain,
+                    "serial": serial,
+                    "coord": coord,
+                }
+
+                if coord is not None:
+                    coords_map[coord] = atom_info
+                    atom_list.append((coord, atom_info))
+                if serial is not None:
+                    serials_map[serial] = atom_info
+                index_map[atom_count] = atom_info
+    except Exception as e:
+        print(f"[DEBUG] Erro ao construir mapeamento de resíduos do PDB ({pdb_path}): {e}")
+
+    return coords_map, serials_map, index_map, atom_list
+
+
+def _resolve_protein_residue(
+    inter_node: ET.Element,
+    coords_map: Dict[Tuple[float, float, float], Dict[str, Any]],
+    serials_map: Dict[int, Dict[str, Any]],
+    index_map: Dict[int, Dict[str, Any]],
+    atom_list: List[Tuple[Tuple[float, float, float], Dict[str, Any]]],
+    fallback_resname: str,
+    fallback_resnr_raw: str,
+    fallback_chain: str = "",
+) -> Tuple[str, Any, str]:
+    """
+    Resolve o rótulo do resíduo (resname, resnr, chain), resgatando o código de inserção real
+    (ex.: 'VAL62B' ou resnr '62B') quando o PLIP gera <resnr>0</resnr> ou descarta a letra.
+    """
+    matched = None
+
+    # 1. Busca por coordenadas atômicas exatas em <protcoo>
+    protcoo = inter_node.find("protcoo")
+    if protcoo is not None:
+        try:
+            x_el = protcoo.find("x")
+            y_el = protcoo.find("y")
+            z_el = protcoo.find("z")
+            if (
+                x_el is not None
+                and y_el is not None
+                and z_el is not None
+                and x_el.text
+                and y_el.text
+                and z_el.text
+            ):
+                px = float(x_el.text.strip())
+                py = float(y_el.text.strip())
+                pz = float(z_el.text.strip())
+                key = (round(px, 3), round(py, 3), round(pz, 3))
+                if key in coords_map:
+                    matched = coords_map[key]
+                else:
+                    # Tolerância euclidiana para diferenças mínimas de arredondamento (< 0.05 Å)
+                    min_d2 = 0.05 * 0.05
+                    best_info = None
+                    for (cx, cy, cz), info in atom_list:
+                        d2 = (cx - px) ** 2 + (cy - py) ** 2 + (cz - pz) ** 2
+                        if d2 < min_d2:
+                            min_d2 = d2
+                            best_info = info
+                    if best_info is not None:
+                        matched = best_info
+        except Exception:
+            pass
+
+    # 2. Busca por índice/serial de átomo da proteína
+    if not matched:
+        protisdon = inter_node.find("protisdon")
+        candidate_tags = []
+        if protisdon is not None and protisdon.text and protisdon.text.strip().lower() == "true":
+            candidate_tags = ["donoridx"]
+        elif protisdon is not None and protisdon.text and protisdon.text.strip().lower() == "false":
+            candidate_tags = ["acceptoridx"]
+        candidate_tags.extend(["protcarbonidx", "protidx", "donoridx", "acceptoridx"])
+
+        for tag in candidate_tags:
+            el = inter_node.find(tag)
+            if el is not None and el.text and el.text.strip():
+                try:
+                    idx_val = int(el.text.strip())
+                    if idx_val in serials_map:
+                        matched = serials_map[idx_val]
+                        break
+                    elif idx_val in index_map:
+                        matched = index_map[idx_val]
+                        break
+                except ValueError:
+                    pass
+
+    # 3. Se casou com um átomo do PDB de entrada, resgata a anotação canônica verdadeira
+    if matched:
+        return matched["resname"], matched["resnr"], matched["chain"]
+
+    # 4. Fallback com o dado bruto do XML
+    cleaned_resnr: Any = 0
+    if fallback_resnr_raw and fallback_resnr_raw.strip():
+        raw_val = fallback_resnr_raw.strip()
+        m = re.match(r"^(\d+)([A-Za-z]?)$", raw_val)
+        if m:
+            num_part, icode_part = m.groups()
+            cleaned_resnr = f"{int(num_part)}{icode_part}" if icode_part else int(num_part)
+        else:
+            try:
+                cleaned_resnr = int(raw_val)
+            except ValueError:
+                cleaned_resnr = raw_val
+
+    return fallback_resname, cleaned_resnr, fallback_chain
+
+
+def parse_plip_xml(xml_path: Path, pdb_path: Optional[Path] = None):
     """
     Realiza o parsing do relatório XML gerado pelo PLIP.
-    Extrai as pontes de hidrogênio e contatos hidrofóbicos detectados.
+    Extrai as pontes de hidrogênio e contatos hidrofóbicos detectados,
+    cruzando coordenadas e índices com o PDB original para preservar
+    códigos de inserção canônicos (ex.: 'VAL62B', 'ASN62A') em vez de resíduos '0'.
     """
     interactions = {"hydrogen_bonds": [], "hydrophobic_contacts": []}
     xml_path = Path(xml_path)
@@ -195,6 +436,12 @@ def parse_plip_xml(xml_path: Path):
 
     print(f"[DEBUG] Arquivo XML localizado com sucesso: {xml_path}")
 
+    # Localiza e mapeia o PDB de referência para recuperar anotações verdadeiras
+    ref_pdb = _find_pdb_for_xml(xml_path, pdb_path)
+    if ref_pdb:
+        print(f"[DEBUG] PDB de referência para resgate de resíduos: {ref_pdb}")
+    coords_map, serials_map, index_map, atom_list = _load_pdb_residue_mapping(ref_pdb)
+
     try:
         tree = ET.parse(xml_path)
         root = tree.getroot()
@@ -209,54 +456,67 @@ def parse_plip_xml(xml_path: Path):
                 for hb in hbonds_node.findall("hydrogen_bond"):
                     resnr_el = hb.find("resnr")
                     restype_el = hb.find("restype")
+                    reschain_el = hb.find("reschain")
                     dist_d_a_el = hb.find("dist_d-a")  # Distância Doador-Aceitador
                     dist_h_a_el = hb.find(
                         "dist_h-a"
                     )  # Backup: Distância Hidrogênio-Aceitador
 
-                    if resnr_el is not None and restype_el is not None:
-                        resname = (
-                            restype_el.text.strip()
-                            if restype_el.text and restype_el.text.strip()
-                            else "UNK"
-                        )
+                    raw_resname = (
+                        restype_el.text.strip()
+                        if restype_el is not None and restype_el.text and restype_el.text.strip()
+                        else "UNK"
+                    )
+                    raw_resnr = (
+                        resnr_el.text.strip()
+                        if resnr_el is not None and resnr_el.text and resnr_el.text.strip()
+                        else "0"
+                    )
+                    raw_chain = (
+                        reschain_el.text.strip()
+                        if reschain_el is not None and reschain_el.text and reschain_el.text.strip()
+                        else ""
+                    )
 
+                    resname, resnr, chain = _resolve_protein_residue(
+                        hb,
+                        coords_map,
+                        serials_map,
+                        index_map,
+                        atom_list,
+                        raw_resname,
+                        raw_resnr,
+                        raw_chain,
+                    )
+
+                    dist = 0.0
+                    if (
+                        dist_d_a_el is not None
+                        and dist_d_a_el.text
+                        and dist_d_a_el.text.strip()
+                    ):
                         try:
-                            resnr = (
-                                int(resnr_el.text.strip())
-                                if resnr_el.text and resnr_el.text.strip()
-                                else 0
-                            )
+                            dist = float(dist_d_a_el.text.strip())
                         except ValueError:
-                            resnr = 0
+                            dist = 0.0
+                    elif (
+                        dist_h_a_el is not None
+                        and dist_h_a_el.text
+                        and dist_h_a_el.text.strip()
+                    ):
+                        try:
+                            dist = float(dist_h_a_el.text.strip())
+                        except ValueError:
+                            dist = 0.0
 
-                        dist = 0.0
-                        if (
-                            dist_d_a_el is not None
-                            and dist_d_a_el.text
-                            and dist_d_a_el.text.strip()
-                        ):
-                            try:
-                                dist = float(dist_d_a_el.text.strip())
-                            except ValueError:
-                                dist = 0.0
-                        elif (
-                            dist_h_a_el is not None
-                            and dist_h_a_el.text
-                            and dist_h_a_el.text.strip()
-                        ):
-                            try:
-                                dist = float(dist_h_a_el.text.strip())
-                            except ValueError:
-                                dist = 0.0
-
-                        interactions["hydrogen_bonds"].append(
-                            {
-                                "resname": resname,
-                                "resnr": resnr,
-                                "distance": dist,
-                            }
-                        )
+                    interactions["hydrogen_bonds"].append(
+                        {
+                            "resname": resname,
+                            "resnr": resnr,
+                            "reschain": chain,
+                            "distance": dist,
+                        }
+                    )
 
             # Extração de Contatos Hidrofóbicos
             hydrophobic_node = bindingsite.find(".//hydrophobic_interactions")
@@ -264,42 +524,55 @@ def parse_plip_xml(xml_path: Path):
                 for hc in hydrophobic_node.findall("hydrophobic_interaction"):
                     resnr_el = hc.find("resnr")
                     restype_el = hc.find("restype")
+                    reschain_el = hc.find("reschain")
                     dist_el = hc.find("dist")
 
-                    if resnr_el is not None and restype_el is not None:
-                        resname = (
-                            restype_el.text.strip()
-                            if restype_el.text and restype_el.text.strip()
-                            else "UNK"
-                        )
+                    raw_resname = (
+                        restype_el.text.strip()
+                        if restype_el is not None and restype_el.text and restype_el.text.strip()
+                        else "UNK"
+                    )
+                    raw_resnr = (
+                        resnr_el.text.strip()
+                        if resnr_el is not None and resnr_el.text and resnr_el.text.strip()
+                        else "0"
+                    )
+                    raw_chain = (
+                        reschain_el.text.strip()
+                        if reschain_el is not None and reschain_el.text and reschain_el.text.strip()
+                        else ""
+                    )
 
+                    resname, resnr, chain = _resolve_protein_residue(
+                        hc,
+                        coords_map,
+                        serials_map,
+                        index_map,
+                        atom_list,
+                        raw_resname,
+                        raw_resnr,
+                        raw_chain,
+                    )
+
+                    dist = 0.0
+                    if (
+                        dist_el is not None
+                        and dist_el.text
+                        and dist_el.text.strip()
+                    ):
                         try:
-                            resnr = (
-                                int(resnr_el.text.strip())
-                                if resnr_el.text and resnr_el.text.strip()
-                                else 0
-                            )
+                            dist = float(dist_el.text.strip())
                         except ValueError:
-                            resnr = 0
+                            dist = 0.0
 
-                        dist = 0.0
-                        if (
-                            dist_el is not None
-                            and dist_el.text
-                            and dist_el.text.strip()
-                        ):
-                            try:
-                                dist = float(dist_el.text.strip())
-                            except ValueError:
-                                dist = 0.0
-
-                        interactions["hydrophobic_contacts"].append(
-                            {
-                                "resname": resname,
-                                "resnr": resnr,
-                                "distance": dist,
-                            }
-                        )
+                    interactions["hydrophobic_contacts"].append(
+                        {
+                            "resname": resname,
+                            "resnr": resnr,
+                            "reschain": chain,
+                            "distance": dist,
+                        }
+                    )
 
         total_hb = len(interactions["hydrogen_bonds"])
         total_hc = len(interactions["hydrophobic_contacts"])

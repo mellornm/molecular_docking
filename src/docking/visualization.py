@@ -79,11 +79,14 @@ def _normalize_residues(residues: Optional[Sequence[Any]]) -> List[str]:
             unique.append(r)
 
     try:
-        unique.sort(
-            key=lambda x: int(re.match(r"^\d+", x).group(0))
-            if re.match(r"^\d+", x)
-            else 999999
-        )
+        def _norm_sort_key(x: str):
+            m = re.match(r"^(\d+)([A-Za-z]?)$", str(x).strip())
+            if m:
+                num, ic = m.groups()
+                return (int(num), ic)
+            return (999999, str(x))
+
+        unique.sort(key=_norm_sort_key)
     except Exception:
         pass
 
@@ -92,14 +95,14 @@ def _normalize_residues(residues: Optional[Sequence[Any]]) -> List[str]:
 
 def _extract_interactions_and_residues(
     work_dir: Path, interactions_data: Optional[Dict[str, Any]] = None
-) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[int]]:
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Any]]:
     """
     Recupera interações (pontes de hidrogênio e contatos hidrofóbicos) e lista de resíduos
     a partir de interactions_data em memória ou localizando o arquivo interactions.json.
     """
     hbonds: List[Dict[str, Any]] = []
     hcontacts: List[Dict[str, Any]] = []
-    key_residue_numbers: Set[int] = set()
+    key_residue_numbers: Set[Any] = set()
 
     if interactions_data is not None:
         hbonds = interactions_data.get("hydrogen_bonds", [])
@@ -127,21 +130,23 @@ def _extract_interactions_and_residues(
 
     for hb in hbonds:
         resnr = hb.get("resnr")
-        if resnr:
-            try:
-                key_residue_numbers.add(int(resnr))
-            except (ValueError, TypeError):
-                pass
+        if resnr is not None and str(resnr).strip() not in ("", "0"):
+            key_residue_numbers.add(resnr)
 
     for hc in hcontacts:
         resnr = hc.get("resnr")
-        if resnr:
-            try:
-                key_residue_numbers.add(int(resnr))
-            except (ValueError, TypeError):
-                pass
+        if resnr is not None and str(resnr).strip() not in ("", "0"):
+            key_residue_numbers.add(resnr)
 
-    return hbonds, hcontacts, sorted(list(key_residue_numbers))
+    def _res_sort_key(val: Any):
+        s = str(val).strip()
+        m = re.match(r"^(\d+)([A-Za-z]?)$", s)
+        if m:
+            num, ic = m.groups()
+            return (int(num), ic)
+        return (999999, s)
+
+    return hbonds, hcontacts, sorted(list(key_residue_numbers), key=_res_sort_key)
 
 
 def generate_pymol_script(
