@@ -95,18 +95,28 @@ def _normalize_residues(residues: Optional[Sequence[Any]]) -> List[str]:
 
 def _extract_interactions_and_residues(
     work_dir: Path, interactions_data: Optional[Dict[str, Any]] = None
-) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Any]]:
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[Any], Dict[str, List[Dict[str, Any]]]]:
     """
-    Recupera interações (pontes de hidrogênio e contatos hidrofóbicos) e lista de resíduos
-    a partir de interactions_data em memória ou localizando o arquivo interactions.json.
+    Recupera todas as interações (pontes de hidrogênio, contatos hidrofóbicos, pontes salinas,
+    pi-stacking, pi-cátion, ligações de halogênio, complexos metálicos e pontes de água)
+    e a lista consolidada de resíduos-chave a partir de interactions_data em memória
+    ou localizando o arquivo interactions.json.
     """
-    hbonds: List[Dict[str, Any]] = []
-    hcontacts: List[Dict[str, Any]] = []
+    all_interactions: Dict[str, List[Dict[str, Any]]] = {
+        "hydrogen_bonds": [],
+        "hydrophobic_contacts": [],
+        "salt_bridges": [],
+        "pi_stacks": [],
+        "pi_cation_interactions": [],
+        "halogen_bonds": [],
+        "metal_complexes": [],
+        "water_bridges": [],
+    }
     key_residue_numbers: Set[Any] = set()
 
+    inter_dict: Optional[Dict[str, Any]] = None
     if interactions_data is not None:
-        hbonds = interactions_data.get("hydrogen_bonds", [])
-        hcontacts = interactions_data.get("hydrophobic_contacts", [])
+        inter_dict = interactions_data
     else:
         interactions_file = work_dir / "interactions.json"
         if not interactions_file.exists():
@@ -121,22 +131,22 @@ def _extract_interactions_and_residues(
         if interactions_file and interactions_file.exists():
             try:
                 with open(interactions_file, "r", encoding="utf-8") as f:
-                    inter_data = json.load(f)
-                    hbonds = inter_data.get("hydrogen_bonds", [])
-                    hcontacts = inter_data.get("hydrophobic_contacts", [])
+                    inter_dict = json.load(f)
             except Exception:
-                hbonds = []
-                hcontacts = []
+                inter_dict = None
 
-    for hb in hbonds:
-        resnr = hb.get("resnr")
-        if resnr is not None and str(resnr).strip() not in ("", "0"):
-            key_residue_numbers.add(resnr)
+    if inter_dict:
+        for cat in all_interactions:
+            items = inter_dict.get(cat, [])
+            if isinstance(items, list):
+                all_interactions[cat] = items
+                for item in items:
+                    resnr = item.get("resnr")
+                    if resnr is not None and str(resnr).strip() not in ("", "0"):
+                        key_residue_numbers.add(resnr)
 
-    for hc in hcontacts:
-        resnr = hc.get("resnr")
-        if resnr is not None and str(resnr).strip() not in ("", "0"):
-            key_residue_numbers.add(resnr)
+    hbonds = all_interactions["hydrogen_bonds"]
+    hcontacts = all_interactions["hydrophobic_contacts"]
 
     def _res_sort_key(val: Any):
         s = str(val).strip()
@@ -146,7 +156,12 @@ def _extract_interactions_and_residues(
             return (int(num), ic)
         return (999999, s)
 
-    return hbonds, hcontacts, sorted(list(key_residue_numbers), key=_res_sort_key)
+    return (
+        hbonds,
+        hcontacts,
+        sorted(list(key_residue_numbers), key=_res_sort_key),
+        all_interactions,
+    )
 
 
 def generate_pymol_script(
@@ -360,8 +375,8 @@ def generate_pymol_script(
     )
 
     # Extração e normalização de dados de interação
-    hbonds, hcontacts, extracted_resnrs = _extract_interactions_and_residues(
-        work_dir, interactions_data
+    hbonds, hcontacts, extracted_resnrs, all_interactions = (
+        _extract_interactions_and_residues(work_dir, interactions_data)
     )
 
     # Resíduos-chave dinâmicos: argumento explícito > extração PLIP
@@ -526,10 +541,10 @@ def generate_pymol_script(
         ]
     )
 
-    # 6. Interações e Linhas Tracejadas (deepblue, dash_width 4.0, dash_gap 0.3, hide labels)
+    # 6. Interações e Linhas Tracejadas
     if hbonds:
         pml_lines.append(
-            "# 6. Pontes de Hidrogênio (Linhas Tracejadas Deepblue sem Rótulos Numéricos)"
+            "# 6.1 Pontes de Hidrogênio (Linhas Tracejadas Deepblue sem Rótulos Numéricos)"
         )
         unique_hb_pairs: Set[Any] = set()
         for hb in hbonds:
@@ -543,16 +558,83 @@ def generate_pymol_script(
                     f"distance {dist_name}, (polymer and resi {resnr}), (ligand), 4.2, mode=2"
                 )
                 pml_lines.append(f"hide labels, {dist_name}")
+                pml_lines.append(f"set dash_color, deepblue, {dist_name}")
+                pml_lines.append(f"set dash_gap, 0.3, {dist_name}")
+                pml_lines.append(f"set dash_width, 4.0, {dist_name}")
+                pml_lines.append(f"set dash_radius, 0.05, {dist_name}")
+        pml_lines.append("")
 
-        pml_lines.extend(
-            [
-                "set dash_color, deepblue",
-                "set dash_gap, 0.3",
-                "set dash_width, 4.0",
-                "set dash_radius, 0.05",
-                "",
-            ]
+    salt_bridges = all_interactions.get("salt_bridges", [])
+    if salt_bridges:
+        pml_lines.append(
+            "# 6.2 Pontes Salinas (Linhas Tracejadas Warmpink)"
         )
+        unique_sb_pairs: Set[Any] = set()
+        for sb in salt_bridges:
+            resnr = sb.get("resnr")
+            resname = str(sb.get("resname", "RES")).capitalize()
+            if resnr and resnr not in unique_sb_pairs:
+                unique_sb_pairs.add(resnr)
+                dist_name = f"sb_{resname}_{resnr}"
+                pml_lines.append(f"# Salt Bridge {resname}{resnr}")
+                pml_lines.append(
+                    f"distance {dist_name}, (polymer and resi {resnr}), (ligand), 5.0"
+                )
+                pml_lines.append(f"hide labels, {dist_name}")
+                pml_lines.append(f"set dash_color, warmpink, {dist_name}")
+                pml_lines.append(f"set dash_gap, 0.3, {dist_name}")
+                pml_lines.append(f"set dash_width, 4.0, {dist_name}")
+                pml_lines.append(f"set dash_radius, 0.05, {dist_name}")
+        pml_lines.append("")
+
+    pi_interactions = (
+        all_interactions.get("pi_cation_interactions", [])
+        + all_interactions.get("pi_stacks", [])
+    )
+    if pi_interactions:
+        pml_lines.append(
+            "# 6.3 Interações Pi (Cátion-Pi e Pi-Stacking em Forest Green)"
+        )
+        unique_pi_pairs: Set[Any] = set()
+        for pi_item in pi_interactions:
+            resnr = pi_item.get("resnr")
+            resname = str(pi_item.get("resname", "RES")).capitalize()
+            if resnr and resnr not in unique_pi_pairs:
+                unique_pi_pairs.add(resnr)
+                dist_name = f"pi_{resname}_{resnr}"
+                pml_lines.append(f"# Pi Interaction {resname}{resnr}")
+                pml_lines.append(
+                    f"distance {dist_name}, (polymer and resi {resnr}), (ligand), 5.0"
+                )
+                pml_lines.append(f"hide labels, {dist_name}")
+                pml_lines.append(f"set dash_color, forest, {dist_name}")
+                pml_lines.append(f"set dash_gap, 0.3, {dist_name}")
+                pml_lines.append(f"set dash_width, 4.0, {dist_name}")
+                pml_lines.append(f"set dash_radius, 0.05, {dist_name}")
+        pml_lines.append("")
+
+    halogens = all_interactions.get("halogen_bonds", [])
+    if halogens:
+        pml_lines.append(
+            "# 6.4 Ligações de Halogênio (Linhas Tracejadas em Ciano)"
+        )
+        unique_hal_pairs: Set[Any] = set()
+        for hg in halogens:
+            resnr = hg.get("resnr")
+            resname = str(hg.get("resname", "RES")).capitalize()
+            if resnr and resnr not in unique_hal_pairs:
+                unique_hal_pairs.add(resnr)
+                dist_name = f"hal_{resname}_{resnr}"
+                pml_lines.append(f"# Halogen Bond {resname}{resnr}")
+                pml_lines.append(
+                    f"distance {dist_name}, (polymer and resi {resnr}), (ligand), 4.5"
+                )
+                pml_lines.append(f"hide labels, {dist_name}")
+                pml_lines.append(f"set dash_color, cyan, {dist_name}")
+                pml_lines.append(f"set dash_gap, 0.3, {dist_name}")
+                pml_lines.append(f"set dash_width, 4.0, {dist_name}")
+                pml_lines.append(f"set dash_radius, 0.05, {dist_name}")
+        pml_lines.append("")
 
     # 7. Enquadramento e Foco Final no Ligante
     pml_lines.extend(

@@ -80,7 +80,8 @@ def get_vina_bin() -> Path:
 def render_interactions_table(interactions: dict):
     """
     Exibe uma tabela no terminal com os aminoácidos do receptor que fizeram
-    contatos estáticos (pontes de hidrogênio e contatos hidrofóbicos) na Pose 1.
+    contatos estruturais (pontes de hidrogênio, contatos hidrofóbicos, pontes salinas,
+    pi-stacking, pi-cátion, ligações de halogênio, coordenações metálicas e pontes de água).
     """
     table = Table(
         title="[bold magenta]Interações Estáticas Receptor-Ligante (Pose 1)[/bold magenta]",
@@ -91,20 +92,62 @@ def render_interactions_table(interactions: dict):
     table.add_column("Tipo de Interação", style="green")
     table.add_column("Distância (Å)", justify="right", style="white")
 
-    # Adiciona as pontes de hidrogênio
     hbonds = interactions.get("hydrogen_bonds", [])
     for hb in hbonds:
-        res = f"{hb['resname']} {hb['resnr']}"
-        table.add_row(res, "Ponte de Hidrogênio", f"{hb['distance']:.2f}")
+        res = f"{hb.get('resname', 'UNK')} {hb.get('resnr', '')}"
+        table.add_row(res, "Ponte de Hidrogênio", f"{hb.get('distance', 0.0):.2f}")
 
-    # Adiciona os contatos hidrofóbicos
     hcontacts = interactions.get("hydrophobic_contacts", [])
     for hc in hcontacts:
-        res = f"{hc['resname']} {hc['resnr']}"
-        table.add_row(res, "Contato Hidrofóbico", f"{hc['distance']:.2f}")
+        res = f"{hc.get('resname', 'UNK')} {hc.get('resnr', '')}"
+        table.add_row(res, "Contato Hidrofóbico", f"{hc.get('distance', 0.0):.2f}")
 
-    # Mensagem caso não existam interações mapeadas
-    if not hbonds and not hcontacts:
+    salt_bridges = interactions.get("salt_bridges", [])
+    for sb in salt_bridges:
+        res = f"{sb.get('resname', 'UNK')} {sb.get('resnr', '')}"
+        lig_grp = f" ({sb.get('lig_group')})" if sb.get("lig_group") else ""
+        table.add_row(res, f"Ponte Salina{lig_grp}", f"{sb.get('distance', 0.0):.2f}")
+
+    pi_cations = interactions.get("pi_cation_interactions", [])
+    for pc in pi_cations:
+        res = f"{pc.get('resname', 'UNK')} {pc.get('resnr', '')}"
+        lig_grp = f" ({pc.get('lig_group')})" if pc.get("lig_group") else ""
+        table.add_row(res, f"Interação π-Cátion{lig_grp}", f"{pc.get('distance', 0.0):.2f}")
+
+    pi_stacks = interactions.get("pi_stacks", [])
+    for ps in pi_stacks:
+        res = f"{ps.get('resname', 'UNK')} {ps.get('resnr', '')}"
+        st_type = "Paralelo" if ps.get("type") == "P" else ("T-shaped" if ps.get("type") == "T" else ps.get("type", ""))
+        table.add_row(res, f"π-Stacking ({st_type})", f"{ps.get('distance', 0.0):.2f}")
+
+    halogens = interactions.get("halogen_bonds", [])
+    for hg in halogens:
+        res = f"{hg.get('resname', 'UNK')} {hg.get('resnr', '')}"
+        table.add_row(res, "Ligação de Halogênio", f"{hg.get('distance', 0.0):.2f}")
+
+    metals = interactions.get("metal_complexes", [])
+    for mc in metals:
+        res = f"{mc.get('resname', 'UNK')} {mc.get('resnr', '')}"
+        m_type = f" ({mc.get('metal_type')})" if mc.get("metal_type") else ""
+        table.add_row(res, f"Coordenação Metálica{m_type}", f"{mc.get('distance', 0.0):.2f}")
+
+    water_bridges = interactions.get("water_bridges", [])
+    for wb in water_bridges:
+        res = f"{wb.get('resname', 'UNK')} {wb.get('resnr', '')}"
+        table.add_row(res, "Ponte de Água", f"{wb.get('distance', 0.0):.2f}")
+
+    total_count = (
+        len(hbonds)
+        + len(hcontacts)
+        + len(salt_bridges)
+        + len(pi_cations)
+        + len(pi_stacks)
+        + len(halogens)
+        + len(metals)
+        + len(water_bridges)
+    )
+
+    if total_count == 0:
         table.add_row("Nenhuma interação mapeada", "-", "-")
 
     console.print(table)

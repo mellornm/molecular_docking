@@ -370,27 +370,43 @@ def _resolve_protein_residue(
 
     # 2. Busca por índice/serial de átomo da proteína
     if not matched:
-        protisdon = inter_node.find("protisdon")
-        candidate_tags = []
-        if protisdon is not None and protisdon.text and protisdon.text.strip().lower() == "true":
-            candidate_tags = ["donoridx"]
-        elif protisdon is not None and protisdon.text and protisdon.text.strip().lower() == "false":
-            candidate_tags = ["acceptoridx"]
-        candidate_tags.extend(["protcarbonidx", "protidx", "donoridx", "acceptoridx"])
+        prot_idx_list = inter_node.find("prot_idx_list")
+        if prot_idx_list is not None:
+            for idx_el in prot_idx_list.findall("idx"):
+                if idx_el.text and idx_el.text.strip():
+                    try:
+                        idx_val = int(idx_el.text.strip())
+                        if idx_val in serials_map:
+                            matched = serials_map[idx_val]
+                            break
+                        elif idx_val in index_map:
+                            matched = index_map[idx_val]
+                            break
+                    except ValueError:
+                        pass
 
-        for tag in candidate_tags:
-            el = inter_node.find(tag)
-            if el is not None and el.text and el.text.strip():
-                try:
-                    idx_val = int(el.text.strip())
-                    if idx_val in serials_map:
-                        matched = serials_map[idx_val]
-                        break
-                    elif idx_val in index_map:
-                        matched = index_map[idx_val]
-                        break
-                except ValueError:
-                    pass
+        if not matched:
+            protisdon = inter_node.find("protisdon")
+            candidate_tags = []
+            if protisdon is not None and protisdon.text and protisdon.text.strip().lower() == "true":
+                candidate_tags = ["donoridx"]
+            elif protisdon is not None and protisdon.text and protisdon.text.strip().lower() == "false":
+                candidate_tags = ["acceptoridx"]
+            candidate_tags.extend(["protcarbonidx", "protidx", "donoridx", "acceptoridx"])
+
+            for tag in candidate_tags:
+                el = inter_node.find(tag)
+                if el is not None and el.text and el.text.strip():
+                    try:
+                        idx_val = int(el.text.strip())
+                        if idx_val in serials_map:
+                            matched = serials_map[idx_val]
+                            break
+                        elif idx_val in index_map:
+                            matched = index_map[idx_val]
+                            break
+                    except ValueError:
+                        pass
 
     # 3. Se casou com um átomo do PDB de entrada, resgata a anotação canônica verdadeira
     if matched:
@@ -413,14 +429,26 @@ def _resolve_protein_residue(
     return fallback_resname, cleaned_resnr, fallback_chain
 
 
-def parse_plip_xml(xml_path: Path, pdb_path: Optional[Path] = None):
+def parse_plip_xml(xml_path: Path, pdb_path: Optional[Path] = None) -> Dict[str, List[Dict[str, Any]]]:
     """
-    Realiza o parsing do relatório XML gerado pelo PLIP.
-    Extrai as pontes de hidrogênio e contatos hidrofóbicos detectados,
-    cruzando coordenadas e índices com o PDB original para preservar
+    Realiza o parsing completo do relatório XML gerado pelo PLIP.
+    Extrai o conjunto completo de interações intermoleculares:
+    pontes de hidrogênio, contatos hidrofóbicos, pontes salinas,
+    pi-stacking, pi-cátion, ligações de halogênio, complexos metálicos
+    e pontes de água.
+    Cruza coordenadas e índices com o PDB original para preservar
     códigos de inserção canônicos (ex.: 'VAL62B', 'ASN62A') em vez de resíduos '0'.
     """
-    interactions = {"hydrogen_bonds": [], "hydrophobic_contacts": []}
+    interactions: Dict[str, List[Dict[str, Any]]] = {
+        "hydrogen_bonds": [],
+        "hydrophobic_contacts": [],
+        "salt_bridges": [],
+        "pi_stacks": [],
+        "pi_cation_interactions": [],
+        "halogen_bonds": [],
+        "metal_complexes": [],
+        "water_bridges": [],
+    }
     xml_path = Path(xml_path)
 
     if not xml_path.exists():
@@ -442,6 +470,39 @@ def parse_plip_xml(xml_path: Path, pdb_path: Optional[Path] = None):
         print(f"[DEBUG] PDB de referência para resgate de resíduos: {ref_pdb}")
     coords_map, serials_map, index_map, atom_list = _load_pdb_residue_mapping(ref_pdb)
 
+    def _parse_float(el: Optional[ET.Element], default: float = 0.0) -> float:
+        if el is not None and el.text and el.text.strip():
+            try:
+                return float(el.text.strip())
+            except ValueError:
+                return default
+        return default
+
+    def _parse_str(el: Optional[ET.Element], default: str = "") -> str:
+        if el is not None and el.text and el.text.strip():
+            return el.text.strip()
+        return default
+
+    def _parse_bool(el: Optional[ET.Element], default: bool = False) -> bool:
+        if el is not None and el.text and el.text.strip():
+            return el.text.strip().lower() in ("true", "1", "yes")
+        return default
+
+    def _get_res_identity(node: ET.Element) -> Tuple[str, Any, str]:
+        raw_resname = _parse_str(node.find("restype"), "UNK")
+        raw_resnr = _parse_str(node.find("resnr"), "0")
+        raw_chain = _parse_str(node.find("reschain"), "")
+        return _resolve_protein_residue(
+            node,
+            coords_map,
+            serials_map,
+            index_map,
+            atom_list,
+            raw_resname,
+            raw_resnr,
+            raw_chain,
+        )
+
     try:
         tree = ET.parse(xml_path)
         root = tree.getroot()
@@ -450,64 +511,15 @@ def parse_plip_xml(xml_path: Path, pdb_path: Optional[Path] = None):
         print(f"[DEBUG] {len(bindingsites)} bindingsite(s) detectado(s) no XML.")
 
         for bindingsite in bindingsites:
-            # Extração de Pontes de Hidrogênio
+            # 1. Pontes de Hidrogênio
             hbonds_node = bindingsite.find(".//hydrogen_bonds")
             if hbonds_node is not None:
                 for hb in hbonds_node.findall("hydrogen_bond"):
-                    resnr_el = hb.find("resnr")
-                    restype_el = hb.find("restype")
-                    reschain_el = hb.find("reschain")
-                    dist_d_a_el = hb.find("dist_d-a")  # Distância Doador-Aceitador
-                    dist_h_a_el = hb.find(
-                        "dist_h-a"
-                    )  # Backup: Distância Hidrogênio-Aceitador
-
-                    raw_resname = (
-                        restype_el.text.strip()
-                        if restype_el is not None and restype_el.text and restype_el.text.strip()
-                        else "UNK"
-                    )
-                    raw_resnr = (
-                        resnr_el.text.strip()
-                        if resnr_el is not None and resnr_el.text and resnr_el.text.strip()
-                        else "0"
-                    )
-                    raw_chain = (
-                        reschain_el.text.strip()
-                        if reschain_el is not None and reschain_el.text and reschain_el.text.strip()
-                        else ""
-                    )
-
-                    resname, resnr, chain = _resolve_protein_residue(
-                        hb,
-                        coords_map,
-                        serials_map,
-                        index_map,
-                        atom_list,
-                        raw_resname,
-                        raw_resnr,
-                        raw_chain,
-                    )
-
-                    dist = 0.0
-                    if (
-                        dist_d_a_el is not None
-                        and dist_d_a_el.text
-                        and dist_d_a_el.text.strip()
-                    ):
-                        try:
-                            dist = float(dist_d_a_el.text.strip())
-                        except ValueError:
-                            dist = 0.0
-                    elif (
-                        dist_h_a_el is not None
-                        and dist_h_a_el.text
-                        and dist_h_a_el.text.strip()
-                    ):
-                        try:
-                            dist = float(dist_h_a_el.text.strip())
-                        except ValueError:
-                            dist = 0.0
+                    resname, resnr, chain = _get_res_identity(hb)
+                    dist = _parse_float(hb.find("dist_d-a"))
+                    if dist <= 0.0:
+                        dist = _parse_float(hb.find("dist_h-a"))
+                    sidechain = _parse_bool(hb.find("sidechain"))
 
                     interactions["hydrogen_bonds"].append(
                         {
@@ -515,55 +527,16 @@ def parse_plip_xml(xml_path: Path, pdb_path: Optional[Path] = None):
                             "resnr": resnr,
                             "reschain": chain,
                             "distance": dist,
+                            "sidechain": sidechain,
                         }
                     )
 
-            # Extração de Contatos Hidrofóbicos
+            # 2. Contatos Hidrofóbicos
             hydrophobic_node = bindingsite.find(".//hydrophobic_interactions")
             if hydrophobic_node is not None:
                 for hc in hydrophobic_node.findall("hydrophobic_interaction"):
-                    resnr_el = hc.find("resnr")
-                    restype_el = hc.find("restype")
-                    reschain_el = hc.find("reschain")
-                    dist_el = hc.find("dist")
-
-                    raw_resname = (
-                        restype_el.text.strip()
-                        if restype_el is not None and restype_el.text and restype_el.text.strip()
-                        else "UNK"
-                    )
-                    raw_resnr = (
-                        resnr_el.text.strip()
-                        if resnr_el is not None and resnr_el.text and resnr_el.text.strip()
-                        else "0"
-                    )
-                    raw_chain = (
-                        reschain_el.text.strip()
-                        if reschain_el is not None and reschain_el.text and reschain_el.text.strip()
-                        else ""
-                    )
-
-                    resname, resnr, chain = _resolve_protein_residue(
-                        hc,
-                        coords_map,
-                        serials_map,
-                        index_map,
-                        atom_list,
-                        raw_resname,
-                        raw_resnr,
-                        raw_chain,
-                    )
-
-                    dist = 0.0
-                    if (
-                        dist_el is not None
-                        and dist_el.text
-                        and dist_el.text.strip()
-                    ):
-                        try:
-                            dist = float(dist_el.text.strip())
-                        except ValueError:
-                            dist = 0.0
+                    resname, resnr, chain = _get_res_identity(hc)
+                    dist = _parse_float(hc.find("dist"))
 
                     interactions["hydrophobic_contacts"].append(
                         {
@@ -574,11 +547,136 @@ def parse_plip_xml(xml_path: Path, pdb_path: Optional[Path] = None):
                         }
                     )
 
-        total_hb = len(interactions["hydrogen_bonds"])
-        total_hc = len(interactions["hydrophobic_contacts"])
+            # 3. Pontes Salinas
+            salt_node = bindingsite.find(".//salt_bridges")
+            if salt_node is not None:
+                for sb in salt_node.findall("salt_bridge"):
+                    resname, resnr, chain = _get_res_identity(sb)
+                    dist = _parse_float(sb.find("dist"))
+                    protispos = _parse_bool(sb.find("protispos"))
+                    lig_group = _parse_str(sb.find("lig_group"))
+
+                    interactions["salt_bridges"].append(
+                        {
+                            "resname": resname,
+                            "resnr": resnr,
+                            "reschain": chain,
+                            "distance": dist,
+                            "protispos": protispos,
+                            "lig_group": lig_group,
+                        }
+                    )
+
+            # 4. Pi-Stacking
+            pistack_node = bindingsite.find(".//pi_stacks")
+            if pistack_node is not None:
+                for ps in pistack_node.findall("pi_stack"):
+                    resname, resnr, chain = _get_res_identity(ps)
+                    dist = _parse_float(ps.find("centdist"))
+                    stack_type = _parse_str(ps.find("type"), "P")
+                    angle = _parse_float(ps.find("angle"))
+                    offset = _parse_float(ps.find("offset"))
+
+                    interactions["pi_stacks"].append(
+                        {
+                            "resname": resname,
+                            "resnr": resnr,
+                            "reschain": chain,
+                            "distance": dist,
+                            "type": stack_type,
+                            "angle": angle,
+                            "offset": offset,
+                        }
+                    )
+
+            # 5. Pi-Cátion
+            pication_node = bindingsite.find(".//pi_cation_interactions")
+            if pication_node is not None:
+                for pc in pication_node.findall("pi_cation_interaction"):
+                    resname, resnr, chain = _get_res_identity(pc)
+                    dist = _parse_float(pc.find("dist"))
+                    offset = _parse_float(pc.find("offset"))
+                    protcharged = _parse_bool(pc.find("protcharged"))
+                    lig_group = _parse_str(pc.find("lig_group"))
+
+                    interactions["pi_cation_interactions"].append(
+                        {
+                            "resname": resname,
+                            "resnr": resnr,
+                            "reschain": chain,
+                            "distance": dist,
+                            "offset": offset,
+                            "protcharged": protcharged,
+                            "lig_group": lig_group,
+                        }
+                    )
+
+            # 6. Ligações de Halogênio
+            halogen_node = bindingsite.find(".//halogen_bonds")
+            if halogen_node is not None:
+                for hg in halogen_node.findall("halogen_bond"):
+                    resname, resnr, chain = _get_res_identity(hg)
+                    dist = _parse_float(hg.find("dist"))
+                    don_angle = _parse_float(hg.find("don_angle"))
+                    acc_angle = _parse_float(hg.find("acc_angle"))
+
+                    interactions["halogen_bonds"].append(
+                        {
+                            "resname": resname,
+                            "resnr": resnr,
+                            "reschain": chain,
+                            "distance": dist,
+                            "don_angle": don_angle,
+                            "acc_angle": acc_angle,
+                        }
+                    )
+
+            # 7. Complexos Metálicos
+            metal_node = bindingsite.find(".//metal_complexes")
+            if metal_node is not None:
+                for mc in metal_node.findall("metal_complex"):
+                    resname, resnr, chain = _get_res_identity(mc)
+                    dist = _parse_float(mc.find("dist"))
+                    metal_type = _parse_str(mc.find("metal_type"))
+                    target_type = _parse_str(mc.find("target_type"))
+
+                    interactions["metal_complexes"].append(
+                        {
+                            "resname": resname,
+                            "resnr": resnr,
+                            "reschain": chain,
+                            "distance": dist,
+                            "metal_type": metal_type,
+                            "target_type": target_type,
+                        }
+                    )
+
+            # 8. Pontes de Água
+            water_node = bindingsite.find(".//water_bridges")
+            if water_node is not None:
+                for wb in water_node.findall("water_bridge"):
+                    resname, resnr, chain = _get_res_identity(wb)
+                    dist = _parse_float(wb.find("dist_a-w"))
+                    if dist <= 0.0:
+                        dist = _parse_float(wb.find("dist_d-w"))
+
+                    interactions["water_bridges"].append(
+                        {
+                            "resname": resname,
+                            "resnr": resnr,
+                            "reschain": chain,
+                            "distance": dist,
+                        }
+                    )
+
+        total_inter = sum(len(interactions[k]) for k in interactions)
         print(
-            f"[DEBUG] Total de interações extraídas com sucesso: {total_hb + total_hc} "
-            f"({total_hb} pontes de hidrogênio, {total_hc} contatos hidrofóbicos)"
+            f"[DEBUG] Total de interações extraídas com sucesso: {total_inter} "
+            f"({len(interactions['hydrogen_bonds'])} H-bonds, "
+            f"{len(interactions['hydrophobic_contacts'])} hidrofóbicos, "
+            f"{len(interactions['salt_bridges'])} salt bridges, "
+            f"{len(interactions['pi_stacks'])} pi-stacks, "
+            f"{len(interactions['pi_cation_interactions'])} pi-cations)"
         )
 
     except Exception as e:

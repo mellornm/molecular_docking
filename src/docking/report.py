@@ -56,6 +56,12 @@ def parse_pipeline_artifacts(work_dir: Path) -> Tuple[Dict[str, Any], List[str]]
         "interactions": {
             "hydrogen_bonds": [],
             "hydrophobic_contacts": [],
+            "salt_bridges": [],
+            "pi_stacks": [],
+            "pi_cation_interactions": [],
+            "halogen_bonds": [],
+            "metal_complexes": [],
+            "water_bridges": [],
         },
         "hbond_occupancy": [],
         "mmpbsa": None,
@@ -146,16 +152,23 @@ def parse_pipeline_artifacts(work_dir: Path) -> Tuple[Dict[str, Any], List[str]]
             if pharmacokinetics_file:
                 break
 
+    interaction_categories = [
+        "hydrogen_bonds",
+        "hydrophobic_contacts",
+        "salt_bridges",
+        "pi_stacks",
+        "pi_cation_interactions",
+        "halogen_bonds",
+        "metal_complexes",
+        "water_bridges",
+    ]
+
     if interactions_file and interactions_file.exists():
         try:
             with open(interactions_file, "r", encoding="utf-8") as f:
                 inter_json = json.load(f)
-                data["interactions"]["hydrogen_bonds"] = inter_json.get(
-                    "hydrogen_bonds", []
-                )
-                data["interactions"]["hydrophobic_contacts"] = inter_json.get(
-                    "hydrophobic_contacts", []
-                )
+                for cat in interaction_categories:
+                    data["interactions"][cat] = inter_json.get(cat, [])
                 if "pharmacokinetics" in inter_json:
                     data["admet"] = inter_json["pharmacokinetics"]
         except Exception as e:
@@ -163,17 +176,15 @@ def parse_pipeline_artifacts(work_dir: Path) -> Tuple[Dict[str, Any], List[str]]
 
     # Fallback / Auto-correção: se interactions.json não tinha contatos ou possuía resíduos '0' (bug legado de código de inserção)
     has_zero_resnr = any(
-        str(hb.get("resnr", "0")).strip() in ("0", "")
-        for hb in data["interactions"]["hydrogen_bonds"]
-    ) or any(
-        str(hc.get("resnr", "0")).strip() in ("0", "")
-        for hc in data["interactions"]["hydrophobic_contacts"]
+        str(item.get("resnr", "0")).strip() in ("0", "")
+        for cat in interaction_categories
+        for item in data["interactions"][cat]
+    )
+    has_any_interactions = any(
+        len(data["interactions"][cat]) > 0 for cat in interaction_categories
     )
 
-    if (
-        not data["interactions"]["hydrogen_bonds"]
-        and not data["interactions"]["hydrophobic_contacts"]
-    ) or has_zero_resnr:
+    if not has_any_interactions or has_zero_resnr:
         xml_candidates = list(work_dir.glob("*report*.xml")) + [work_dir / "report.xml"]
         for xml_c in xml_candidates:
             if xml_c.exists():
@@ -181,16 +192,9 @@ def parse_pipeline_artifacts(work_dir: Path) -> Tuple[Dict[str, Any], List[str]]
                     from docking.analysis import parse_plip_xml
 
                     parsed_inter = parse_plip_xml(xml_c)
-                    if (
-                        parsed_inter.get("hydrogen_bonds")
-                        or parsed_inter.get("hydrophobic_contacts")
-                    ):
-                        data["interactions"]["hydrogen_bonds"] = parsed_inter.get(
-                            "hydrogen_bonds", []
-                        )
-                        data["interactions"]["hydrophobic_contacts"] = parsed_inter.get(
-                            "hydrophobic_contacts", []
-                        )
+                    if any(len(parsed_inter.get(cat, [])) > 0 for cat in interaction_categories):
+                        for cat in interaction_categories:
+                            data["interactions"][cat] = parsed_inter.get(cat, [])
                         break
                 except Exception:
                     pass
@@ -222,10 +226,7 @@ def parse_pipeline_artifacts(work_dir: Path) -> Tuple[Dict[str, Any], List[str]]
 
     if not data["admet"]:
         warnings.append("Dados farmacocinéticos (ADMET) não encontrados.")
-    if (
-        not data["interactions"]["hydrogen_bonds"]
-        and not data["interactions"]["hydrophobic_contacts"]
-    ):
+    if not any(len(data["interactions"][cat]) > 0 for cat in interaction_categories):
         warnings.append("Mapeamento de interações estruturais (PLIP) não encontrado.")
 
     # 3. Parse do Sumário MM-PBSA
@@ -352,19 +353,52 @@ def generate_html_report(
         mmpbsa_subtext = "Janela Termodinâmica: 60 - 100 ns (Pendente)"
 
     admet = data.get("admet") or {}
-    admet_pass = admet.get("pass_filters", False)
     verdict_cat = admet.get("verdict_category")
     hia_status = admet.get("hia_status", "N/A")
     bbb_status = admet.get("bbb_status", "N/A")
     pgp_status = admet.get("pgp_status", "N/A")
     toxic_alerts = admet.get("toxic_alerts", [])
     total_viol = admet.get("total_violations", 0)
-    all_viol = admet.get("all_violations", [])
     attention_note = admet.get("attention_note", "")
 
-    hbonds = data["interactions"]["hydrogen_bonds"]
-    hcontacts = data["interactions"]["hydrophobic_contacts"]
-    total_interactions = len(hbonds) + len(hcontacts)
+    interactions_dict = data.get("interactions", {})
+    hbonds = interactions_dict.get("hydrogen_bonds", [])
+    hcontacts = interactions_dict.get("hydrophobic_contacts", [])
+    salt_bridges = interactions_dict.get("salt_bridges", [])
+    pi_stacks = interactions_dict.get("pi_stacks", [])
+    pi_cations = interactions_dict.get("pi_cation_interactions", [])
+    halogens = interactions_dict.get("halogen_bonds", [])
+    metals = interactions_dict.get("metal_complexes", [])
+    water_bridges = interactions_dict.get("water_bridges", [])
+
+    total_interactions = (
+        len(hbonds)
+        + len(hcontacts)
+        + len(salt_bridges)
+        + len(pi_stacks)
+        + len(pi_cations)
+        + len(halogens)
+        + len(metals)
+        + len(water_bridges)
+    )
+
+    subtext_parts = []
+    if hbonds:
+        subtext_parts.append(f"{len(hbonds)} H-Bond{'s' if len(hbonds) > 1 else ''}")
+    if hcontacts:
+        subtext_parts.append(f"{len(hcontacts)} Hidrofóbico{'s' if len(hcontacts) > 1 else ''}")
+    if salt_bridges:
+        subtext_parts.append(f"{len(salt_bridges)} Ponte{'s' if len(salt_bridges) > 1 else ''} Salina{'s' if len(salt_bridges) > 1 else ''}")
+    if pi_cations or pi_stacks:
+        tot_pi = len(pi_cations) + len(pi_stacks)
+        subtext_parts.append(f"{tot_pi} &pi;-Interaç{'ões' if tot_pi > 1 else 'ão'}")
+    if halogens:
+        subtext_parts.append(f"{len(halogens)} Halogênio{'s' if len(halogens) > 1 else ''}")
+    if metals:
+        subtext_parts.append(f"{len(metals)} Coord. Metálica{'s' if len(metals) > 1 else ''}")
+    if water_bridges:
+        subtext_parts.append(f"{len(water_bridges)} Ponte{'s' if len(water_bridges) > 1 else ''} de Água")
+    interactions_subtext = " | ".join(subtext_parts) if subtext_parts else "Nenhum contato mapeado"
 
     # Fallback caso verdict_category não esteja gravado no JSON legado
     if not verdict_cat and admet:
@@ -563,7 +597,7 @@ def generate_html_report(
 
     # Geração das Linhas da Tabela de Interações (PLIP)
     interaction_rows_html = ""
-    if hbonds or hcontacts:
+    if total_interactions > 0:
         for hb in hbonds:
             res_label = (
                 f"<strong>{hb.get('resname', 'UNK')}</strong> {hb.get('resnr', '')}"
@@ -588,6 +622,92 @@ def generate_html_report(
                 <td><span class="badge badge-amber">Contato Hidrofóbico</span></td>
                 <td class="text-mono">{dist:.2f} &Aring;</td>
                 <td>Interação de Van der Waals / Apolar</td>
+            </tr>
+            """
+        for sb in salt_bridges:
+            res_label = (
+                f"<strong>{sb.get('resname', 'UNK')}</strong> {sb.get('resnr', '')}"
+            )
+            dist = sb.get("distance", 0.0)
+            lig_grp = f" ({sb.get('lig_group')})" if sb.get("lig_group") else ""
+            interaction_rows_html += f"""
+            <tr>
+                <td><span class="res-tag res-salt">{res_label}</span></td>
+                <td><span class="badge badge-purple">Ponte Salina</span></td>
+                <td class="text-mono">{dist:.2f} &Aring;</td>
+                <td>Interação Eletrostática Iônica Forte{lig_grp}</td>
+            </tr>
+            """
+        for pc in pi_cations:
+            res_label = (
+                f"<strong>{pc.get('resname', 'UNK')}</strong> {pc.get('resnr', '')}"
+            )
+            dist = pc.get("distance", 0.0)
+            lig_grp = f" ({pc.get('lig_group')})" if pc.get("lig_group") else ""
+            interaction_rows_html += f"""
+            <tr>
+                <td><span class="res-tag res-pi">{res_label}</span></td>
+                <td><span class="badge badge-indigo">Interação &pi;-Cátion</span></td>
+                <td class="text-mono">{dist:.2f} &Aring;</td>
+                <td>Interação Eletrostática Cátion-&pi;{lig_grp}</td>
+            </tr>
+            """
+        for ps in pi_stacks:
+            res_label = (
+                f"<strong>{ps.get('resname', 'UNK')}</strong> {ps.get('resnr', '')}"
+            )
+            dist = ps.get("distance", 0.0)
+            st_type = (
+                "Paralelo"
+                if ps.get("type") == "P"
+                else ("T-shaped" if ps.get("type") == "T" else ps.get("type", ""))
+            )
+            interaction_rows_html += f"""
+            <tr>
+                <td><span class="res-tag res-pi">{res_label}</span></td>
+                <td><span class="badge badge-teal">&pi;-Stacking ({st_type})</span></td>
+                <td class="text-mono">{dist:.2f} &Aring;</td>
+                <td>Empilhamento Aromático &pi;-&pi;</td>
+            </tr>
+            """
+        for hg in halogens:
+            res_label = (
+                f"<strong>{hg.get('resname', 'UNK')}</strong> {hg.get('resnr', '')}"
+            )
+            dist = hg.get("distance", 0.0)
+            interaction_rows_html += f"""
+            <tr>
+                <td><span class="res-tag res-halogen">{res_label}</span></td>
+                <td><span class="badge badge-info">Ligação de Halogênio</span></td>
+                <td class="text-mono">{dist:.2f} &Aring;</td>
+                <td>Interação Eletrostática &sigma;-hole</td>
+            </tr>
+            """
+        for mc in metals:
+            res_label = (
+                f"<strong>{mc.get('resname', 'UNK')}</strong> {mc.get('resnr', '')}"
+            )
+            dist = mc.get("distance", 0.0)
+            m_type = f" ({mc.get('metal_type')})" if mc.get("metal_type") else ""
+            interaction_rows_html += f"""
+            <tr>
+                <td><span class="res-tag res-metal">{res_label}</span></td>
+                <td><span class="badge badge-cyan">Coordenação Metálica</span></td>
+                <td class="text-mono">{dist:.2f} &Aring;</td>
+                <td>Coordenação com Íon Metálico{m_type}</td>
+            </tr>
+            """
+        for wb in water_bridges:
+            res_label = (
+                f"<strong>{wb.get('resname', 'UNK')}</strong> {wb.get('resnr', '')}"
+            )
+            dist = wb.get("distance", 0.0)
+            interaction_rows_html += f"""
+            <tr>
+                <td><span class="res-tag res-water">{res_label}</span></td>
+                <td><span class="badge badge-secondary">Ponte de Água</span></td>
+                <td class="text-mono">{dist:.2f} &Aring;</td>
+                <td>Interação Mediada por Solvente</td>
             </tr>
             """
     else:
@@ -1183,6 +1303,36 @@ def generate_html_report(
             border: 1px solid #cbd5e1;
         }}
 
+        .badge-purple {{
+            background-color: #fdf4ff;
+            color: #86198f;
+            border: 1px solid #f5d0fe;
+        }}
+
+        .badge-indigo {{
+            background-color: #eef2ff;
+            color: #3730a3;
+            border: 1px solid #c7d2fe;
+        }}
+
+        .badge-teal {{
+            background-color: #f0fdfa;
+            color: #115e59;
+            border: 1px solid #99f6e4;
+        }}
+
+        .badge-info {{
+            background-color: #f0f9ff;
+            color: #0369a1;
+            border: 1px solid #bae6fd;
+        }}
+
+        .badge-cyan {{
+            background-color: #ecfeff;
+            color: #0e7490;
+            border: 1px solid #a5f3fc;
+        }}
+
         /* Tags de Resíduos */
         .res-tag {{
             display: inline-block;
@@ -1203,6 +1353,36 @@ def generate_html_report(
             background-color: #fef3c7;
             color: #b45309;
             border: 1px solid #fde68a;
+        }}
+
+        .res-salt {{
+            background-color: #fdf4ff;
+            color: #86198f;
+            border: 1px solid #f5d0fe;
+        }}
+
+        .res-pi {{
+            background-color: #eef2ff;
+            color: #3730a3;
+            border: 1px solid #c7d2fe;
+        }}
+
+        .res-halogen {{
+            background-color: #ecfeff;
+            color: #0e7490;
+            border: 1px solid #a5f3fc;
+        }}
+
+        .res-metal {{
+            background-color: #f1f5f9;
+            color: #0f172a;
+            border: 1px solid #cbd5e1;
+        }}
+
+        .res-water {{
+            background-color: #f8fafc;
+            color: #334155;
+            border: 1px solid #e2e8f0;
         }}
 
         /* Galeria de Gráficos da DM */
@@ -1383,7 +1563,7 @@ def generate_html_report(
             <div class="metric-card card-plip">
                 <div class="metric-label">Interações Estruturais</div>
                 <div class="metric-value">{total_interactions}</div>
-                <div class="metric-subtext">{len(hbonds)} H-Bonds | {len(hcontacts)} Hidrofóbicos</div>
+                <div class="metric-subtext">{interactions_subtext}</div>
             </div>
         </section>
 
