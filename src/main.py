@@ -27,7 +27,6 @@ from docking import (
     vina_runner,
     visualization,
 )
-from docking.preparation import get_executable
 
 app = typer.Typer(help="Pipeline de Docking Molecular Automatizado")
 console = Console()
@@ -677,10 +676,9 @@ def screen(
                 description="Executando PLIP (Docker)...", total=1
             )
             sdf_out = results_dir / f"{target_id}_{ligand_name}_docked_poses.sdf"
-            import subprocess
-
-            exec_name = get_executable("mk_export")
-            subprocess.run([exec_name, str(docked_out), "-s", str(sdf_out)], check=True)
+            ok, err = analysis.export_docked_pdbqt_to_sdf(docked_out, sdf_out)
+            if not ok:
+                raise RuntimeError(err)
             shutil.copy2(sdf_out, results_dir / "docked_poses.sdf")
 
             # Resolve o receptor PDB correspondente

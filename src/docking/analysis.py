@@ -19,21 +19,63 @@ def extract_vina_score(log_path: Path):
         return None
 
 
+def export_docked_pdbqt_to_sdf(
+    docked_pdbqt: Path, sdf_out: Path
+) -> Tuple[bool, Optional[str]]:
+    """
+    Exporta o arquivo PDBQT acoplado para SDF.
+    Usa o Meeko diretamente em memória (RDKitMolCreate.write_sd_string)
+    com fallback para o utilitário CLI 'mk_export' caso necessário.
+    """
+    docked_pdbqt = Path(docked_pdbqt)
+    sdf_out = Path(sdf_out)
+
+    # 1. Tentativa via API interna do Meeko (rápida, em memória, imune a erros de subprocess)
+    try:
+        from meeko import PDBQTMolecule, RDKitMolCreate
+
+        with open(docked_pdbqt, "r") as f:
+            string = f.read()
+
+        mol_name = docked_pdbqt.stem
+        pdbqt_mol = PDBQTMolecule(
+            string, name=mol_name, is_dlg=False, skip_typing=True
+        )
+        sdf_string, failures = RDKitMolCreate.write_sd_string(pdbqt_mol)
+
+        if sdf_string:
+            sdf_out.parent.mkdir(parents=True, exist_ok=True)
+            with open(sdf_out, "w") as f:
+                f.write(sdf_string)
+            return True, None
+    except Exception as e_mem:
+        err_detail = str(e_mem)
+    else:
+        err_detail = "Nenhuma pose válida convertida pelo Meeko."
+
+    # 2. Fallback para CLI 'mk_export'
+    try:
+        from docking.preparation import get_executable
+
+        exec_name = get_executable("mk_export")
+        cmd = [exec_name, str(docked_pdbqt), "-s", str(sdf_out)]
+        subprocess.run(cmd, capture_output=True, text=True, check=True)
+        if sdf_out.exists():
+            return True, None
+        return False, "O arquivo de saída SDF não foi gerado pelo executável."
+    except Exception as e_cli:
+        return False, (
+            f"Falha ao gerar SDF via Meeko API ({err_detail}) "
+            f"e via CLI ({e_cli})"
+        )
+
+
 def analyze_results(docked_pdbqt: Path, reference_pdb: Path, results_dir: Path):
     sdf_out = results_dir / "docked_poses.sdf"
 
-    # Exporta para SDF usando o meeko CLI
-    from docking.preparation import get_executable
-
-    exec_name = get_executable("mk_export")
-    cmd = [exec_name, str(docked_pdbqt), "-s", str(sdf_out)]
-    try:
-        subprocess.run(cmd, capture_output=True, text=True, check=True)
-    except Exception as e:
-        return None, f"Falha ao gerar o arquivo SDF via {exec_name}: {str(e)}"
-
-    if not sdf_out.exists():
-        return None, "Falha ao gerar o arquivo SDF. O arquivo de saída não foi gerado."
+    ok, err = export_docked_pdbqt_to_sdf(docked_pdbqt, sdf_out)
+    if not ok:
+        return None, f"Falha ao gerar o arquivo SDF: {err}"
 
     try:
         ref_mol = Chem.MolFromPDBFile(str(reference_pdb), removeHs=True)
